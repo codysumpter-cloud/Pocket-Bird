@@ -1,15 +1,25 @@
 import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, screen } from "electron";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const APP_ID = "dev.prismtek.pocketbuddy";
+const PRIVATE_ART_SCHEMA = "pocket-buddy-private-art-bundle-v1";
+const PRIVATE_ART_MANIFEST = "private-art-manifest.json";
+const PRIVATE_ART_MAX_PACK_BYTES = 250 * 1024 * 1024;
+const DESKTOP_PREFS_FILE = "desktop-preferences.json";
+const SHA256_RE = /^[0-9a-f]{64}$/;
 let overlayWindow = null;
 let tray = null;
 let quitting = false;
 let displayRefreshTimer = null;
+let bundledArtCache = new Map();
+let selectedMonitor = "primary";
+let desktopPrefsPath = null;
 
 if (process.platform === "win32") {
   app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
@@ -18,21 +28,82 @@ if (process.platform === "win32") {
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 
-function unionDisplayBounds() {
+function displayId(display) {
+  return String(display?.id ?? "");
+}
+
+function selectedDisplay() {
   const displays = screen.getAllDisplays();
-  if (!displays.length) return { x: 0, y: 0, width: 1280, height: 720 };
-  let left = Infinity;
-  let top = Infinity;
-  let right = -Infinity;
-  let bottom = -Infinity;
-  for (const display of displays) {
-    const { x, y, width, height } = display.bounds;
-    left = Math.min(left, x);
-    top = Math.min(top, y);
-    right = Math.max(right, x + width);
-    bottom = Math.max(bottom, y + height);
+  const primary = screen.getPrimaryDisplay?.() ?? displays[0];
+  if (!primary) return null;
+  if (selectedMonitor === "primary") return primary;
+  return displays.find((display) => displayId(display) === selectedMonitor) ?? primary;
+}
+
+function selectedWorkArea() {
+  const display = selectedDisplay();
+  const area = display?.workArea ?? display?.bounds ?? { x: 0, y: 0, width: 1280, height: 720 };
+  return {
+    x: Math.round(area.x),
+    y: Math.round(area.y),
+    width: Math.max(1, Math.round(area.width)),
+    height: Math.max(1, Math.round(area.height)),
+  };
+}
+
+function displaySnapshot() {
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay?.() ?? displays[0];
+  const effective = selectedDisplay();
+  return {
+    selected: selectedMonitor,
+    effective: effective ? displayId(effective) : "",
+    displays: displays.map((display, index) => ({
+      id: displayId(display),
+      label: `Monitor ${index + 1} — ${Math.round(display.workArea?.width ?? display.bounds.width)}×${Math.round(display.workArea?.height ?? display.bounds.height)}`,
+      primary: Boolean(primary && displayId(display) === displayId(primary)),
+      scaleFactor: display.scaleFactor ?? 1,
+      bounds: { ...display.bounds },
+      workArea: { ...(display.workArea ?? display.bounds) },
+    })),
+  };
+}
+
+async function loadDesktopPreferences() {
+  desktopPrefsPath = join(app.getPath("userData"), DESKTOP_PREFS_FILE);
+  try {
+    const parsed = JSON.parse(await readFile(desktopPrefsPath, "utf8"));
+    if (typeof parsed?.selectedMonitor === "string" && (parsed.selectedMonitor === "primary" || /^-?\d+$/.test(parsed.selectedMonitor))) {
+      selectedMonitor = parsed.selectedMonitor;
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") console.warn("Pocket Buddy desktop preferences could not be read", error);
   }
-  return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+}
+
+async function saveDesktopPreferences() {
+  if (!desktopPrefsPath) desktopPrefsPath = join(app.getPath("userData"), DESKTOP_PREFS_FILE);
+  await mkdir(dirname(desktopPrefsPath), { recursive: true });
+  await writeFile(desktopPrefsPath, `${JSON.stringify({ selectedMonitor }, null, 2)}\n`, "utf8");
+}
+
+function applySelectedMonitorBounds() {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  overlayWindow.setBounds(selectedWorkArea(), false);
+  applyDesktopWindowContract(overlayWindow);
+}
+
+async function chooseMonitor(value) {
+  const next = String(value ?? "primary");
+  if (next !== "primary" && !screen.getAllDisplays().some((display) => displayId(display) === next)) {
+    throw new Error("Selected monitor is not currently connected.");
+  }
+  selectedMonitor = next;
+  await saveDesktopPreferences();
+  applySelectedMonitorBounds();
+  overlayWindow?.webContents.send("pocket-buddy:displays-changed", displaySnapshot());
+  refreshTrayMenu();
+  return displaySnapshot();
 }
 
 function applyDesktopWindowContract(window) {
@@ -43,7 +114,7 @@ function applyDesktopWindowContract(window) {
 }
 
 function createOverlayWindow() {
-  const bounds = unionDisplayBounds();
+  const bounds = selectedWorkArea();
   const window = new BrowserWindow({
     ...bounds,
     transparent: true,
@@ -71,7 +142,7 @@ function createOverlayWindow() {
   applyDesktopWindowContract(window);
   window.loadFile(join(__dirname, "index.html"));
   window.once("ready-to-show", () => {
-    applyDesktopWindowContract(window);
+    applySelectedMonitorBounds();
     window.showInactive();
   });
   window.on("close", (event) => {
@@ -93,6 +164,21 @@ function sendCommand(command) {
   overlayWindow.webContents.send("pocket-buddy:command", command);
 }
 
+function monitorTrayItems() {
+  const snapshot = displaySnapshot();
+  const primary = snapshot.displays.find((display) => display.primary);
+  const choices = [
+    { id: "primary", label: primary ? `Primary — ${primary.label}` : "Primary" },
+    ...snapshot.displays.filter((display) => !display.primary).map((display) => ({ id: display.id, label: display.label })),
+  ];
+  return choices.map((choice) => ({
+    label: choice.label,
+    type: "radio",
+    checked: snapshot.selected === choice.id,
+    click: () => { void chooseMonitor(choice.id); },
+  }));
+}
+
 function refreshTrayMenu() {
   if (!tray) return;
   const visible = Boolean(overlayWindow?.isVisible());
@@ -107,6 +193,7 @@ function refreshTrayMenu() {
     { label: "Buddies & Field Guide", click: () => sendCommand("pets") },
     { label: "Care", click: () => sendCommand("care") },
     { label: "Talk", click: () => sendCommand("talk") },
+    { label: "Monitor", submenu: monitorTrayItems() },
     { type: "separator" },
     { label: "Quit Pocket Buddy", click: () => { quitting = true; app.quit(); } },
   ]));
@@ -136,10 +223,101 @@ function scheduleDisplayRefresh() {
   if (displayRefreshTimer) clearTimeout(displayRefreshTimer);
   displayRefreshTimer = setTimeout(() => {
     displayRefreshTimer = null;
-    if (!overlayWindow || overlayWindow.isDestroyed()) return;
-    overlayWindow.setBounds(unionDisplayBounds(), false);
-    applyDesktopWindowContract(overlayWindow);
+    applySelectedMonitorBounds();
+    overlayWindow?.webContents.send("pocket-buddy:displays-changed", displaySnapshot());
+    refreshTrayMenu();
   }, 120);
+}
+
+function privateArtRootCandidates() {
+  const candidates = [
+    join(process.resourcesPath, "private-art"),
+    process.env.PORTABLE_EXECUTABLE_DIR ? join(process.env.PORTABLE_EXECUTABLE_DIR, "Art Packs") : null,
+    join(dirname(process.execPath), "Art Packs"),
+    join(__dirname, "..", "private-art"),
+  ].filter(Boolean);
+  return [...new Set(candidates.map((candidate) => resolve(candidate)))];
+}
+
+function safeZipLeaf(value, field) {
+  if (typeof value !== "string" || !value || basename(value) !== value || !/\.zip$/i.test(value)) {
+    throw new Error(`Private art manifest has an unsafe ${field}.`);
+  }
+  return value;
+}
+
+async function sha256File(path) {
+  const bytes = await readFile(path);
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function loadPrivateArtRoot(root) {
+  const manifestPath = join(root, PRIVATE_ART_MANIFEST);
+  let raw;
+  try {
+    raw = await readFile(manifestPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+
+  let manifest;
+  try { manifest = JSON.parse(raw); }
+  catch { throw new Error(`Private art manifest is invalid JSON: ${manifestPath}`); }
+  if (manifest?.schema !== PRIVATE_ART_SCHEMA || !Array.isArray(manifest.packs)) {
+    throw new Error(`Private art manifest has the wrong schema: ${manifestPath}`);
+  }
+  if (manifest.packs.length > 200) throw new Error("Private art bundle contains too many packs.");
+
+  const entries = [];
+  for (const item of manifest.packs) {
+    const file = safeZipLeaf(item?.file, "file");
+    const importName = safeZipLeaf(item?.importName ?? file, "importName");
+    const expectedSha = String(item?.sha256 ?? "").toLowerCase();
+    if (!SHA256_RE.test(expectedSha)) throw new Error(`Private art entry ${file} has an invalid SHA-256.`);
+    const fullPath = join(root, file);
+    const info = await stat(fullPath);
+    if (!info.isFile() || info.size <= 0 || info.size > PRIVATE_ART_MAX_PACK_BYTES) {
+      throw new Error(`Private art entry ${file} is missing, empty, or too large.`);
+    }
+    const actualSha = await sha256File(fullPath);
+    if (actualSha !== expectedSha) {
+      throw new Error(`Private art integrity failure for ${file}: expected ${expectedSha}, got ${actualSha}.`);
+    }
+    entries.push({
+      id: expectedSha,
+      displayName: typeof item.displayName === "string" && item.displayName.trim() ? item.displayName.trim().slice(0, 120) : importName.replace(/\.zip$/i, ""),
+      kind: item.kind === "human" ? "human" : "buddy",
+      file,
+      importName,
+      sha256: expectedSha,
+      bytes: info.size,
+      root,
+      fullPath,
+    });
+  }
+  return entries;
+}
+
+async function discoverBundledArt() {
+  const merged = new Map();
+  for (const root of privateArtRootCandidates()) {
+    const entries = await loadPrivateArtRoot(root);
+    for (const entry of entries) if (!merged.has(entry.sha256)) merged.set(entry.sha256, entry);
+  }
+  bundledArtCache = new Map([...merged.values()].map((entry) => [entry.id, entry]));
+  return [...merged.values()].map(({ root: _root, fullPath: _fullPath, ...publicEntry }) => publicEntry);
+}
+
+async function readBundledArt(id) {
+  if (!bundledArtCache.has(id)) await discoverBundledArt();
+  const entry = bundledArtCache.get(id);
+  if (!entry) throw new Error("Requested bundled art pack is not registered.");
+  const actualSha = await sha256File(entry.fullPath);
+  if (actualSha !== entry.sha256) throw new Error(`Private art integrity changed after discovery: ${entry.file}`);
+  const bytes = await readFile(entry.fullPath);
+  const copy = Uint8Array.from(bytes);
+  return { id: entry.id, sha256: entry.sha256, importName: entry.importName, bytes: copy.buffer };
 }
 
 ipcMain.on("pocket-buddy:set-interactive", (event, interactive) => {
@@ -153,11 +331,17 @@ ipcMain.on("pocket-buddy:quit", () => {
   app.quit();
 });
 
-app.whenReady().then(() => {
+ipcMain.handle("pocket-buddy:list-bundled-art", async () => discoverBundledArt());
+ipcMain.handle("pocket-buddy:read-bundled-art", async (_event, id) => readBundledArt(String(id ?? "")));
+ipcMain.handle("pocket-buddy:list-displays", async () => displaySnapshot());
+ipcMain.handle("pocket-buddy:select-display", async (_event, id) => chooseMonitor(id));
+
+app.whenReady().then(async () => {
   app.setName("Pocket Buddy");
   if (process.platform === "win32") app.setAppUserModelId(APP_ID);
   if (process.platform === "darwin") app.dock?.hide();
 
+  await loadDesktopPreferences();
   overlayWindow = createOverlayWindow();
   createTray();
 
