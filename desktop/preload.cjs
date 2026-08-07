@@ -19,4 +19,16 @@ contextBridge.exposeInMainWorld("PocketBuddyDesktop", {
   readBundledArt(id) {
     return ipcRenderer.invoke("pocket-buddy:read-bundled-art", String(id ?? ""));
   },
+  listDisplays() {
+    return ipcRenderer.invoke("pocket-buddy:list-displays");
+  },
+  selectDisplay(id) {
+    return ipcRenderer.invoke("pocket-buddy:select-display", String(id ?? "primary"));
+  },
+  onDisplaysChanged(callback) {
+    if (typeof callback !== "function") return () => {};
+    const handler = (_event, snapshot) => callback(snapshot);
+    ipcRenderer.on("pocket-buddy:displays-changed", handler);
+    return () => ipcRenderer.removeListener("pocket-buddy:displays-changed", handler);
+  },
 });
