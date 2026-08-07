@@ -1,0 +1,105 @@
+name: Native desktop builds
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "src/**"
+      - "sprites/**"
+      - "fonts/**"
+      - "images/**"
+      - "build.js"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/native-desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Regenerate npm lockfile from package.json
+        run: npm install --package-lock-only --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install desktop build dependencies
+        run: npm install
+      - name: Syntax check desktop shell
+        run: |
+          node --check desktop/main.mjs
+          node --check desktop/preload.cjs
+          node --check desktop/renderer.js
+      - name: Package Windows installer and portable app
+        run: npm run package:desktop:win
+      - name: Verify Windows artifacts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist-native -File
+          $files | ForEach-Object { Write-Host $_.Name $_.Length }
+          if (-not ($files.Name -match "setup.*\.exe$")) { throw "Windows installer missing" }
+          if (-not ($files.Name -match "portable.*\.exe$")) { throw "Windows portable build missing" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pocket-buddy-windows
+          path: dist-native/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install desktop build dependencies
+        run: npm install
+      - name: Syntax check desktop shell
+        run: |
+          node --check desktop/main.mjs
+          node --check desktop/preload.cjs
+          node --check desktop/renderer.js
+      - name: Package universal macOS app
+        run: npm run package:desktop:mac
+      - name: Verify macOS artifacts
+        run: |
+          find dist-native -maxdepth 1 -type f -print
+          test -n "$(find dist-native -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$(find dist-native -maxdepth 1 -name '*.zip' -print -quit)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pocket-buddy-macos-universal
+          path: |
+            dist-native/*.dmg
+            dist-native/*.zip
+          if-no-files-found: error
+          retention-days: 14
