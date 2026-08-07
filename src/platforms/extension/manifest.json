@@ -1,9 +1,9 @@
 {
     "manifest_version": 3,
-    "name": "Pocket Bird",
-    "description": "It's a pet bird in your browser, what more could you want?",
+    "name": "Pocket Buddy",
+    "description": "A tiny Buddy companion with optional Home, OpenPets, and My Pets.",
     "version": "__VERSION__",
-    "homepage_url": "https://idreesinc.com",
+    "homepage_url": "https://github.com/codysumpter-cloud/Pocket-Buddy",
     "icons": {
         "48": "images/icons/transparent/48x48x1.png",
         "96": "images/icons/transparent/96x96x1.png",
@@ -22,6 +22,9 @@
     "permissions": [
         "storage"
     ],
+    "host_permissions": [
+        "https://openpets.dev/*"
+    ],
     "web_accessible_resources": [
         {
             "resources": [
@@ -35,7 +38,7 @@
     ],
     "browser_specific_settings": {
         "gecko": {
-            "id": "pocket-bird@idreesinc.com",
+            "id": "pocket-buddy@prismtek.dev",
             "data_collection_permissions": {
                 "required": [
                     "none"
