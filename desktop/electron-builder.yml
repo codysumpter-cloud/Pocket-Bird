@@ -8,6 +8,12 @@ files:
   - images/icons/transparent/**
   - package.json
 
+extraResources:
+  - from: private-art
+    to: private-art
+    filter:
+      - "**/*"
+
 asar: true
 npmRebuild: false
 publish: null
