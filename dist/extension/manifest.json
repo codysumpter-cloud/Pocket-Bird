@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Pocket Buddy",
     "description": "A tiny Buddy for your browser with pets, care, memory, Home, feathers, and the Pocket Bird field guide.",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "homepage_url": "https://prismtek.dev",
     "icons": {
         "48": "images/icons/transparent/48x48x1.png",
