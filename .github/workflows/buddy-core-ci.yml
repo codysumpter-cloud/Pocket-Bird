@@ -19,7 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Buddy regression tests
-        run: node --test tests/buddy-brain.test.mjs tests/ui-theme.test.mjs
+        run: node --test tests/*.test.mjs
       - name: Source syntax checks
         run: |
           node --check src/buddy/brain.js
