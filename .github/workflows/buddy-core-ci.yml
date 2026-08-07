@@ -30,9 +30,10 @@ jobs:
           node --check src/buddy/pet-runtime.js
           node --check src/buddy/home.js
           node --check src/buddy/layer.js
-      - name: Build every Pocket Bird delivery format
+          node --check scripts/postprocess-build.mjs
+      - name: Build every Pocket Buddy delivery format
         run: npm run build
-      - name: Verify generated targets
+      - name: Verify generated targets and product identity
         run: |
           test -s dist/web/birb.embed.js
           test -s dist/userscript/birb.user.js
@@ -45,8 +46,15 @@ jobs:
           grep -q 'PocketBuddy' dist/userscript/birb.user.js
           grep -q 'PocketBuddy' dist/extension/birb.js
           grep -q 'PocketBuddy' dist/obsidian/main.js
+          grep -q 'Pocket Buddy 1.1.0' dist/web/birb.embed.js
+          grep -q 'github.com/codysumpter-cloud/Pocket-Buddy' dist/web/birb.embed.js
+          ! grep -q 'github.com/IdreesInc/Pocket-Bird' dist/web/birb.embed.js
           grep -q '"name": "Pocket Buddy"' dist/extension/manifest.json
+          grep -q '"version": "1.1.0"' dist/extension/manifest.json
           grep -q '"name": "Pocket Buddy"' dist/obsidian/manifest.json
+          grep -q '"version": "1.1.0"' dist/obsidian/manifest.json
+      - name: Verify tracked deterministic dist matches source
+        run: git diff --exit-code -- dist ':!dist/extension.zip'
       - name: Upload testable all-formats build
         uses: actions/upload-artifact@v4
         with:

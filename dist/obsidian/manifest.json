@@ -1,10 +1,10 @@
 {
     "id": "pocket-bird",
-    "name": "Pocket Bird",
-    "version": "2026.7.30",
+    "name": "Pocket Buddy",
+    "version": "1.1.0",
     "minAppVersion": "0.15.0",
-    "description": "Add a pet bird to fly around your notes and keep you company!",
-    "author": "Idrees Hassan",
-    "authorUrl": "https://idreesinc.com",
+    "description": "Add your Pocket Buddy to Obsidian with pets, care, memory, Home, feathers, and the Pocket Bird field guide.",
+    "author": "Prismtek / Idrees Hassan",
+    "authorUrl": "https://prismtek.dev",
     "isDesktopOnly": false
 }
