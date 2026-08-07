@@ -53,8 +53,8 @@ jobs:
           grep -q '"version": "1.1.0"' dist/extension/manifest.json
           grep -q '"name": "Pocket Buddy"' dist/obsidian/manifest.json
           grep -q '"version": "1.1.0"' dist/obsidian/manifest.json
-      - name: Verify tracked dist matches source
-        run: git diff --exit-code -- dist
+      - name: Verify tracked deterministic dist matches source
+        run: git diff --exit-code -- dist ':!dist/extension.zip'
       - name: Upload testable all-formats build
         uses: actions/upload-artifact@v4
         with:
