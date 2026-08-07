@@ -16,6 +16,7 @@ for (const path of javascriptOutputs) {
   if (!existsSync(path)) continue;
   let content = readFileSync(path, "utf8");
   content = content
+    .replaceAll("__POCKET_BUDDY_VERSION__", version)
     .replaceAll("https://github.com/IdreesInc/Pocket-Bird", sourceUrl)
     .replace(/Build \d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?/g, `Pocket Buddy ${version}`)
     .replace(/Thank you for using Pocket Bird! You are on version: \d{4}\.\d{1,2}\.\d{1,2}(?:\.\d+)?/g, `Thank you for using Pocket Buddy! You are on version: ${version}`);
