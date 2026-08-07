@@ -1,12 +1,14 @@
 {
-  "name": "birb",
+  "name": "pocket-buddy",
   "version": "1.0.0",
-  "description": "",
+  "description": "Pocket Bird-simple companion with Buddy life, Home, OpenPets, and My Pets.",
   "license": "ISC",
   "author": "Idrees Hassan",
   "type": "module",
   "scripts": {
     "build": "node build.js",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test && npm run build",
     "dev": "nodemon --watch src --watch package.json --watch stylesheet.css --watch build.js --watch obsidian-manifest.json --watch browser-manifest.json --watch sprites/species.png --exec \"npm run build\"",
     "sprites": "node sprite-builder.js"
   },
