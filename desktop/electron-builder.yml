@@ -4,7 +4,7 @@ artifactName: Pocket-Buddy-${version}-${os}-${arch}.${ext}
 
 files:
   - desktop/**
-  - dist/desktop/**
+  - dist/web/**
   - images/icons/transparent/**
   - package.json
 
