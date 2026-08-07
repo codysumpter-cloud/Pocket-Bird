@@ -47,3 +47,10 @@ jobs:
           grep -q 'PocketBuddy' dist/obsidian/main.js
           grep -q '"name": "Pocket Buddy"' dist/extension/manifest.json
           grep -q '"name": "Pocket Buddy"' dist/obsidian/manifest.json
+      - name: Upload testable all-formats build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocket-buddy-all-formats
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
