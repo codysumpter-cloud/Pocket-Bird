@@ -1,10 +1,10 @@
 {
     "id": "pocket-bird",
-    "name": "Pocket Bird",
+    "name": "Pocket Buddy",
     "version": "__VERSION__",
     "minAppVersion": "0.15.0",
-    "description": "Add a pet bird to fly around your notes and keep you company!",
-    "author": "Idrees Hassan",
-    "authorUrl": "https://idreesinc.com",
+    "description": "A tiny Buddy companion for your notes with optional Home, OpenPets, and My Pets.",
+    "author": "Idrees Hassan / Prismtek",
+    "authorUrl": "https://prismtek.dev",
     "isDesktopOnly": false
 }
