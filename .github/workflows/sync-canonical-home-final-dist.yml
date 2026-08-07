@@ -1,0 +1,37 @@
+name: Sync final canonical Home dist
+
+on:
+  push:
+    branches:
+      - fix/windows-home-art-scale-motion
+    paths:
+      - .github/workflows/sync-canonical-home-final-dist.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/windows-home-art-scale-motion
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Commit deterministic bundles and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/sync-canonical-home-final-dist.yml
+          git add dist ':!dist/extension.zip'
+          git commit -m "build: sync final canonical Home bundles"
+          git push origin HEAD:fix/windows-home-art-scale-motion
