@@ -11,6 +11,22 @@ import {
 export const MENU_ID = "birb-menu";
 export const MENU_EXIT_ID = "birb-menu-exit";
 
+/** @type {Set<(items: MenuItem[]) => MenuItem[]|void>} */
+const menuTransformers = new Set();
+
+/**
+ * Extend an existing Pocket Buddy menu without replacing the menu runtime.
+ * Transformers receive the current menu and can return a new list. This keeps
+ * features such as Buddy Brain/Home in the same tiny click-the-pet menu rather
+ * than introducing a separate dashboard shell.
+ * @param {(items: MenuItem[]) => MenuItem[]|void} transformer
+ * @returns {() => void}
+ */
+export function registerMenuTransformer(transformer) {
+	menuTransformers.add(transformer);
+	return () => menuTransformers.delete(transformer);
+}
+
 export class MenuItem {
 	/**
 	 * @param {string|(() => string)} text
@@ -70,6 +86,29 @@ export class Separator extends MenuItem {
 	}
 }
 
+/** @param {MenuItem} item */
+export function menuItemText(item) {
+	try {
+		return typeof item.text === "function" ? item.text() : item.text;
+	} catch {
+		return "";
+	}
+}
+
+/** @param {MenuItem[]} menuItems */
+function transformedMenuItems(menuItems) {
+	let current = [...menuItems];
+	for (const transformer of menuTransformers) {
+		try {
+			const transformed = transformer([...current]);
+			if (Array.isArray(transformed)) current = transformed;
+		} catch (err) {
+			error("Pocket Buddy menu extension failed", err);
+		}
+	}
+	return current;
+}
+
 /**
  * @param {MenuItem} item
  * @param {() => void} removeMenuCallback
@@ -79,7 +118,7 @@ function createMenuItem(item, removeMenuCallback) {
 	if (item instanceof Separator) {
 		return makeElement("birb-window-separator");
 	}
-	let menuItem = makeElement("birb-menu-item", typeof item.text === "function" ? item.text() : item.text);
+	let menuItem = makeElement("birb-menu-item", menuItemText(item));
 	if (item.icon) {
 		const iconCanvas = document.createElement("canvas");
 		iconCanvas.width = 7;
@@ -94,14 +133,13 @@ function createMenuItem(item, removeMenuCallback) {
 						ctx.fillRect(col, row, 1, 1);
 					}
 				}
-			}
+		}
 		}
 		menuItem.prepend(iconCanvas);
 	}
 	if (item instanceof SpinnerMenuItem) {
 		menuItem.classList.add("birb-menu-item-spinner");
 		const container = makeElement("birb-menu-item-spinner-container");
-		// Prevent accidental resets
 		onClick(container, (e) => e.stopPropagation());
 		menuItem.appendChild(container);
 		const leftButton = makeElement("birb-spinner-button", "-");
@@ -120,10 +158,12 @@ function createMenuItem(item, removeMenuCallback) {
 		container.appendChild(rightButton);
 	}
 	onClick(menuItem, () => {
-		if (item.removeMenu) {
-			removeMenuCallback();
-		}
+		const label = menuItemText(item);
+		if (item.removeMenu) removeMenuCallback();
 		item.action();
+		if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+			window.dispatchEvent(new CustomEvent("pocket-buddy:menu-action", { detail: { label } }));
+		}
 	});
 	return menuItem;
 }
@@ -136,9 +176,7 @@ function createMenuItem(item, removeMenuCallback) {
  * @param {() => void} [titleClickCallback]
  */
 export function insertMenu(menuItems, title, updateLocationCallback, titleClickCallback) {
-	if (getShadowRoot().querySelector("#" + MENU_ID)) {
-		return;
-	}
+	if (getShadowRoot().querySelector("#" + MENU_ID)) return;
 	let menu = makeElement("birb-window", undefined, MENU_ID);
 	let header = makeElement("birb-window-header");
 	const titleDiv = makeElement("birb-window-title", title);
@@ -152,10 +190,8 @@ export function insertMenu(menuItems, title, updateLocationCallback, titleClickC
 		});
 		titleDiv.classList.add("birb-window-title-clickable");
 	}
-	for (const item of menuItems) {
-		if (!(item instanceof ConditionalMenuItem) || item.condition()) {
-			content.appendChild(createMenuItem(item, removeCallback));
-		}
+	for (const item of transformedMenuItems(menuItems)) {
+		if (!(item instanceof ConditionalMenuItem) || item.condition()) content.appendChild(createMenuItem(item, removeCallback));
 	}
 	menu.appendChild(header);
 	menu.appendChild(content);
@@ -166,27 +202,16 @@ export function insertMenu(menuItems, title, updateLocationCallback, titleClickC
 	onClick(menuExit, removeCallback);
 	getShadowRoot().appendChild(menuExit);
 	makeClosable(removeCallback);
-
 	updateLocationCallback(menu);
 }
 
-/**
- * Remove the menu from the page
- */
 export function removeMenu() {
 	const menu = getShadowRoot().querySelector("#" + MENU_ID);
-	if (menu) {
-		menu.remove();
-	}
+	if (menu) menu.remove();
 	const exitMenu = getShadowRoot().querySelector("#" + MENU_EXIT_ID);
-	if (exitMenu) {
-		exitMenu.remove();
-	}
+	if (exitMenu) exitMenu.remove();
 }
 
-/**
- * @returns {boolean} Whether the menu element is on the page
- */
 export function isMenuOpen() {
 	return getShadowRoot().querySelector("#" + MENU_ID) !== null;
 }
@@ -197,22 +222,16 @@ export function isMenuOpen() {
  */
 export function switchMenuItems(menuItems, updateLocationCallback) {
 	const menu = getShadowRoot().querySelector("#" + MENU_ID);
-	if (!menu || !(menu instanceof HTMLElement)) {
-		return;
-	}
+	if (!menu || !(menu instanceof HTMLElement)) return;
 	const content = menu.querySelector(".birb-window-content");
 	if (!content) {
 		error("Birb: Content not found");
 		return;
 	}
-	while (content.firstChild) {
-		content.removeChild(content.firstChild);
-	}
+	while (content.firstChild) content.removeChild(content.firstChild);
 	const removeCallback = () => removeMenu();
-	for (const item of menuItems) {
-		if (!(item instanceof ConditionalMenuItem) || item.condition()) {
-			content.appendChild(createMenuItem(item, removeCallback));
-		}
+	for (const item of transformedMenuItems(menuItems)) {
+		if (!(item instanceof ConditionalMenuItem) || item.condition()) content.appendChild(createMenuItem(item, removeCallback));
 	}
 	updateLocationCallback(menu);
 }
