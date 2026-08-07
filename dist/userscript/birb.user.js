@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Pocket Bird
-// @namespace    https://idreesinc.com
-// @version      2026.7.30
-// @description  It's a pet bird in your browser, what more could you want?
-// @author       Idrees
-// @downloadURL  https://github.com/IdreesInc/Pocket-Bird/raw/refs/heads/main/dist/userscript/birb.user.js
-// @updateURL    https://github.com/IdreesInc/Pocket-Bird/raw/refs/heads/main/dist/userscript/birb.user.js
+// @name         Pocket Buddy
+// @namespace    https://prismtek.dev/pocket-buddy
+// @version      2026.8.7
+// @description  A tiny Buddy with pets, care, memory, Home, feathers, and the Pocket Bird field guide.
+// @author       Prismtek (forked from Pocket Bird by Idrees Hassan)
+// @downloadURL  https://github.com/codysumpter-cloud/Pocket-Buddy/raw/refs/heads/main/dist/userscript/birb.user.js
+// @updateURL    https://github.com/codysumpter-cloud/Pocket-Buddy/raw/refs/heads/main/dist/userscript/birb.user.js
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -2763,7 +2763,7 @@
 			}),
 			new Separator(),
 			new MenuItem(() => `Source Code ${isPetBoostActive() ? " ❤" : ""}`, () => { window.open("https://github.com/IdreesInc/Pocket-Bird"); }),
-			new MenuItem("Build 2026.7.30", () => { alert("Thank you for using Pocket Bird! You are on version: 2026.7.30"); }, undefined, false),
+			new MenuItem("Build 2026.8.7", () => { alert("Thank you for using Pocket Bird! You are on version: 2026.8.7"); }, undefined, false),
 		];
 
 		/** @type {Birb} */
@@ -3940,6 +3940,1283 @@
 		draw();
 	}
 
+	const STATE_PREFIX = "pocket-buddy.";
+	const ASSET_DB = "pocket-buddy-assets";
+	const ASSET_STORE = "archives";
+	const CHUNK_SIZE = 480_000;
+
+	function hasChromeStorage() {
+	  return typeof chrome !== "undefined" && chrome?.storage?.local;
+	}
+
+	function hasGmStorage() {
+	  return typeof GM_getValue === "function" && typeof GM_setValue === "function";
+	}
+
+	function chromeGet(keys) {
+	  return new Promise((resolve, reject) => {
+	    chrome.storage.local.get(keys, (result) => {
+	      const error = chrome.runtime?.lastError;
+	      if (error) reject(new Error(error.message));
+	      else resolve(result ?? {});
+	    });
+	  });
+	}
+
+	function chromeSet(value) {
+	  return new Promise((resolve, reject) => {
+	    chrome.storage.local.set(value, () => {
+	      const error = chrome.runtime?.lastError;
+	      if (error) reject(new Error(error.message));
+	      else resolve();
+	    });
+	  });
+	}
+
+	function chromeRemove(keys) {
+	  return new Promise((resolve, reject) => {
+	    chrome.storage.local.remove(keys, () => {
+	      const error = chrome.runtime?.lastError;
+	      if (error) reject(new Error(error.message));
+	      else resolve();
+	    });
+	  });
+	}
+
+	function bytesToBase64(bytes) {
+	  let binary = "";
+	  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+	    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + 0x8000)));
+	  }
+	  return btoa(binary);
+	}
+
+	function base64ToBytes(base64) {
+	  const binary = atob(base64);
+	  const bytes = new Uint8Array(binary.length);
+	  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+	  return bytes;
+	}
+
+	function openAssetDb() {
+	  return new Promise((resolve, reject) => {
+	    if (typeof indexedDB === "undefined") {
+	      reject(new Error("IndexedDB is unavailable in this host."));
+	      return;
+	    }
+	    const request = indexedDB.open(ASSET_DB, 1);
+	    request.onerror = () => reject(request.error ?? new Error("Pocket Buddy asset database failed to open."));
+	    request.onupgradeneeded = () => {
+	      const db = request.result;
+	      if (!db.objectStoreNames.contains(ASSET_STORE)) db.createObjectStore(ASSET_STORE);
+	    };
+	    request.onsuccess = () => resolve(request.result);
+	  });
+	}
+
+	async function idbGet(key) {
+	  const db = await openAssetDb();
+	  try {
+	    return await new Promise((resolve, reject) => {
+	      const tx = db.transaction(ASSET_STORE, "readonly");
+	      const request = tx.objectStore(ASSET_STORE).get(key);
+	      request.onerror = () => reject(request.error ?? new Error("Pocket Buddy asset read failed."));
+	      request.onsuccess = () => resolve(request.result ?? null);
+	    });
+	  } finally {
+	    db.close();
+	  }
+	}
+
+	async function idbPut(key, value) {
+	  const db = await openAssetDb();
+	  try {
+	    await new Promise((resolve, reject) => {
+	      const tx = db.transaction(ASSET_STORE, "readwrite");
+	      tx.onerror = () => reject(tx.error ?? new Error("Pocket Buddy asset write failed."));
+	      tx.oncomplete = () => resolve();
+	      tx.objectStore(ASSET_STORE).put(value, key);
+	    });
+	  } finally {
+	    db.close();
+	  }
+	}
+
+	async function idbDelete(key) {
+	  const db = await openAssetDb();
+	  try {
+	    await new Promise((resolve, reject) => {
+	      const tx = db.transaction(ASSET_STORE, "readwrite");
+	      tx.onerror = () => reject(tx.error ?? new Error("Pocket Buddy asset delete failed."));
+	      tx.oncomplete = () => resolve();
+	      tx.objectStore(ASSET_STORE).delete(key);
+	    });
+	  } finally {
+	    db.close();
+	  }
+	}
+
+	function safeJsonParse(value, fallback) {
+	  if (value === undefined || value === null || value === "") return fallback;
+	  if (typeof value !== "string") return value;
+	  try { return JSON.parse(value); } catch { return fallback; }
+	}
+
+	async function getJson(key, fallback = null) {
+	  const namespaced = `${STATE_PREFIX}${key}`;
+	  if (hasChromeStorage()) {
+	    const result = await chromeGet([namespaced]);
+	    return result[namespaced] ?? fallback;
+	  }
+	  if (hasGmStorage()) {
+	    const value = await Promise.resolve(GM_getValue(namespaced, fallback));
+	    return safeJsonParse(value, fallback);
+	  }
+	  try {
+	    return safeJsonParse(localStorage.getItem(namespaced), fallback);
+	  } catch {
+	    return fallback;
+	  }
+	}
+
+	async function setJson(key, value) {
+	  const namespaced = `${STATE_PREFIX}${key}`;
+	  if (hasChromeStorage()) {
+	    await chromeSet({ [namespaced]: value });
+	    return;
+	  }
+	  if (hasGmStorage()) {
+	    await Promise.resolve(GM_setValue(namespaced, value));
+	    return;
+	  }
+	  localStorage.setItem(namespaced, JSON.stringify(value));
+	}
+
+	async function removeJson(key) {
+	  const namespaced = `${STATE_PREFIX}${key}`;
+	  if (hasChromeStorage()) {
+	    await chromeRemove([namespaced]);
+	    return;
+	  }
+	  if (hasGmStorage() && typeof GM_deleteValue === "function") {
+	    await Promise.resolve(GM_deleteValue(namespaced));
+	    return;
+	  }
+	  try { localStorage.removeItem(namespaced); } catch {}
+	}
+
+	async function readChunked(storeKey, getValues) {
+	  const metaKey = `${storeKey}.meta`;
+	  const metaResult = await getValues([metaKey]);
+	  const meta = metaResult[metaKey];
+	  if (!meta || !Number.isInteger(meta.chunks) || meta.chunks < 1 || meta.chunks > 2048) return null;
+	  const chunkKeys = Array.from({ length: meta.chunks }, (_, index) => `${storeKey}.${index}`);
+	  const chunks = await getValues(chunkKeys);
+	  const base64 = chunkKeys.map((key) => typeof chunks[key] === "string" ? chunks[key] : "").join("");
+	  if (!base64) return null;
+	  const bytes = base64ToBytes(base64);
+	  if (Number.isFinite(meta.bytes) && bytes.byteLength !== meta.bytes) throw new Error("Pocket Buddy archive storage is incomplete.");
+	  return bytes.buffer;
+	}
+
+	async function writeChunked(storeKey, buffer, setValues, removeValues) {
+	  const bytes = new Uint8Array(buffer);
+	  const base64 = bytesToBase64(bytes);
+	  const chunks = [];
+	  for (let offset = 0; offset < base64.length; offset += CHUNK_SIZE) chunks.push(base64.slice(offset, offset + CHUNK_SIZE));
+	  const old = await readChunkMeta(storeKey, async (keys) => {
+	    if (hasChromeStorage()) return chromeGet(keys);
+	    const result = {};
+	    for (const key of keys) result[key] = await Promise.resolve(GM_getValue(key, null));
+	    return result;
+	  });
+	  if (old?.chunks) {
+	    const stale = Array.from({ length: old.chunks }, (_, index) => `${storeKey}.${index}`);
+	    await removeValues(stale);
+	  }
+	  for (let start = 0; start < chunks.length; start += 8) {
+	    const batch = {};
+	    for (let index = start; index < Math.min(chunks.length, start + 8); index += 1) batch[`${storeKey}.${index}`] = chunks[index];
+	    await setValues(batch);
+	  }
+	  await setValues({ [`${storeKey}.meta`]: { chunks: chunks.length, bytes: bytes.byteLength } });
+	}
+
+	async function readChunkMeta(storeKey, getValues) {
+	  const key = `${storeKey}.meta`;
+	  const result = await getValues([key]);
+	  return result[key] ?? null;
+	}
+
+	async function getBinary(key) {
+	  const storeKey = `${STATE_PREFIX}asset.${key}`;
+	  if (hasChromeStorage()) return readChunked(storeKey, chromeGet);
+	  if (hasGmStorage()) {
+	    return readChunked(storeKey, async (keys) => {
+	      const result = {};
+	      for (const item of keys) result[item] = await Promise.resolve(GM_getValue(item, null));
+	      return result;
+	    });
+	  }
+	  return idbGet(storeKey);
+	}
+
+	async function setBinary(key, buffer) {
+	  const storeKey = `${STATE_PREFIX}asset.${key}`;
+	  const normalized = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+	  if (hasChromeStorage()) {
+	    await writeChunked(storeKey, normalized, chromeSet, chromeRemove);
+	    return;
+	  }
+	  if (hasGmStorage()) {
+	    await writeChunked(
+	      storeKey,
+	      normalized,
+	      async (values) => { for (const [item, value] of Object.entries(values)) await Promise.resolve(GM_setValue(item, value)); },
+	      async (keys) => { if (typeof GM_deleteValue === "function") for (const item of keys) await Promise.resolve(GM_deleteValue(item)); },
+	    );
+	    return;
+	  }
+	  await idbPut(storeKey, normalized);
+	}
+
+	async function removeBinary(key) {
+	  const storeKey = `${STATE_PREFIX}asset.${key}`;
+	  if (hasChromeStorage()) {
+	    const meta = await readChunkMeta(storeKey, chromeGet);
+	    const keys = [`${storeKey}.meta`, ...Array.from({ length: meta?.chunks ?? 0 }, (_, index) => `${storeKey}.${index}`)];
+	    await chromeRemove(keys);
+	    return;
+	  }
+	  if (hasGmStorage()) {
+	    const meta = await readChunkMeta(storeKey, async (keys) => {
+	      const result = {};
+	      for (const item of keys) result[item] = await Promise.resolve(GM_getValue(item, null));
+	      return result;
+	    });
+	    if (typeof GM_deleteValue === "function") {
+	      for (const item of [`${storeKey}.meta`, ...Array.from({ length: meta?.chunks ?? 0 }, (_, index) => `${storeKey}.${index}`)]) await Promise.resolve(GM_deleteValue(item));
+	    }
+	    return;
+	  }
+	  await idbDelete(storeKey);
+	}
+
+	function createBuddyStorage() {
+	  return { getJson, setJson, removeJson, getBinary, setBinary, removeBinary };
+	}
+
+	const BUDDY_BRAIN_STATE_VERSION = 3;
+	const STATE_KEY = "brain.state.v3";
+	const MINUTE_MS = 60_000;
+	const HOUR_MS = 60 * MINUTE_MS;
+	const DAY_MS = 24 * HOUR_MS;
+	const MAX_CATCHUP_MS = 30 * DAY_MS;
+	const MESS_INTERVAL_MS = 4 * HOUR_MS;
+
+	const DEFAULT_PERSONALITY = Object.freeze({
+	  sociability: 0.55,
+	  curiosity: 0.65,
+	  playfulness: 0.6,
+	  diligence: 0.55,
+	  bravery: 0.45,
+	  affection: 0.65,
+	  independence: 0.45,
+	  patience: 0.55,
+	  aggression: 0.2,
+	  creativity: 0.6,
+	  neatness: 0.5,
+	});
+
+	const DEFAULT_DRIVES = Object.freeze({
+	  hunger: 0.15,
+	  energy: 0.1,
+	  comfort: 0.1,
+	  safety: 0.05,
+	  boredom: 0.2,
+	  curiosity: 0.25,
+	  affection: 0.15,
+	  social: 0.15,
+	  accomplishment: 0.2,
+	  cleanliness: 0.05,
+	  focus: 0.15,
+	});
+
+	const DEFAULT_RELATIONSHIP = Object.freeze({ affection: 0.5, trust: 0.5, familiarity: 0.1, respect: 0.4 });
+
+	function clamp$1(value, min, max) { return Math.max(min, Math.min(max, value)); }
+	function clamp01(value, fallback = 0) { return clamp$1(Number.isFinite(value) ? value : fallback, 0, 1); }
+	function finite(value, fallback) { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
+	function integer(value, fallback = 0) { return Math.max(0, Math.floor(finite(value, fallback))); }
+	function isRecord$1(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
+	function text(value, fallback = "", maximum = 500) {
+	  const result = typeof value === "string" ? value.trim() : "";
+	  return (result || fallback).slice(0, maximum);
+	}
+	function stringArray(value, maximum = 100, itemMaximum = 500) {
+	  return Array.isArray(value) ? value.filter((item) => typeof item === "string").map((item) => item.trim().slice(0, itemMaximum)).filter(Boolean).slice(-maximum) : [];
+	}
+	function numericMap(source, defaults) {
+	  const current = isRecord$1(source) ? source : {};
+	  return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, clamp01(current[key], fallback)]));
+	}
+	function careCounts(value = {}) {
+	  const current = isRecord$1(value) ? value : {};
+	  return {
+	    fed: integer(current.fed), played: integer(current.played), petted: integer(current.petted),
+	    napped: integer(current.napped), cleaned: integer(current.cleaned), medicated: integer(current.medicated), restarted: integer(current.restarted),
+	  };
+	}
+
+	function defaultBrain(currentAffection = 50) {
+	  return {
+	    schema: "pocket-buddy-brain-v1",
+	    buddyId: "primary-buddy",
+	    displayName: "Buddy",
+	    personality: { ...DEFAULT_PERSONALITY },
+	    drives: { ...DEFAULT_DRIVES },
+	    relationship: { ...DEFAULT_RELATIONSHIP, affection: clamp01(currentAffection / 100, 0.5) },
+	    stats: { skillPoints: 0, rerolls: 1, strength: 1, defense: 1, speed: 1, focus: 1 },
+	    notes: [], tasks: [],
+	    messages: [{ role: "buddy", text: "Hey! I’m here whenever you need me.", at: 0 }],
+	    trainingCounts: {}, learnedAssociations: {}, actionCounts: {}, lastActions: [], workingMemory: [], inventory: {},
+	    customization: { wardrobe: "classic" },
+	  };
+	}
+
+	function cleanTasks(value) {
+	  if (!Array.isArray(value)) return [];
+	  return value.filter(isRecord$1).map((task, index) => ({
+	    id: text(task.id, `task-${index + 1}`, 80), text: text(task.text, "", 240), completed: task.completed === true, createdAt: Math.max(0, finite(task.createdAt, 0)),
+	  })).filter((task) => task.text).slice(-100);
+	}
+	function cleanMessages(value) {
+	  if (!Array.isArray(value)) return [];
+	  return value.filter(isRecord$1).map((message) => ({
+	    role: message.role === "user" ? "user" : "buddy", text: text(message.text, "", 500), at: Math.max(0, finite(message.at, 0)),
+	  })).filter((message) => message.text).slice(-80);
+	}
+	function cleanWorkingMemory(value) {
+	  if (!Array.isArray(value)) return [];
+	  return value.filter(isRecord$1).map((entry) => ({ action: text(entry.action, "", 64), at: Math.max(0, finite(entry.at, 0)) })).filter((entry) => entry.action).slice(-32);
+	}
+
+	function cleanBrain(value, lifecycle) {
+	  const source = isRecord$1(value) ? value : {};
+	  const fallback = defaultBrain(lifecycle.affection);
+	  const relationship = numericMap(source.relationship, { ...DEFAULT_RELATIONSHIP, affection: lifecycle.affection / 100 });
+	  relationship.affection = clamp01(lifecycle.affection / 100, relationship.affection);
+	  const stats = isRecord$1(source.stats) ? source.stats : {};
+	  const actionCountsSource = isRecord$1(source.actionCounts) ? source.actionCounts : {};
+	  const actionCounts = Object.fromEntries(Object.entries(actionCountsSource).filter(([key, count]) => /^[A-Za-z0-9._:-]{1,64}$/.test(key) && Number.isFinite(count)).map(([key, count]) => [key, integer(count)]).slice(0, 100));
+	  const trainingSource = isRecord$1(source.trainingCounts) ? source.trainingCounts : {};
+	  const trainingCounts = Object.fromEntries(Object.entries(trainingSource).filter(([key, count]) => key in DEFAULT_PERSONALITY && Number.isFinite(count)).map(([key, count]) => [key, integer(count)]));
+	  const messages = cleanMessages(source.messages);
+	  return {
+	    schema: "pocket-buddy-brain-v1",
+	    buddyId: text(source.buddyId, fallback.buddyId, 80).toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "primary-buddy",
+	    displayName: text(source.displayName, fallback.displayName, 64),
+	    personality: numericMap(source.personality, DEFAULT_PERSONALITY),
+	    drives: numericMap(source.drives, DEFAULT_DRIVES), relationship,
+	    stats: {
+	      skillPoints: integer(stats.skillPoints), rerolls: integer(stats.rerolls, 1), strength: Math.max(1, finite(stats.strength, 1)),
+	      defense: Math.max(1, finite(stats.defense, 1)), speed: Math.max(1, finite(stats.speed, 1)), focus: Math.max(1, finite(stats.focus, 1)),
+	    },
+	    notes: stringArray(source.notes, 100, 500), tasks: cleanTasks(source.tasks), messages: messages.length ? messages : fallback.messages,
+	    trainingCounts, learnedAssociations: isRecord$1(source.learnedAssociations) ? structuredClone(source.learnedAssociations) : {}, actionCounts,
+	    lastActions: stringArray(source.lastActions, 16, 64), workingMemory: cleanWorkingMemory(source.workingMemory),
+	    inventory: isRecord$1(source.inventory) ? structuredClone(source.inventory) : {},
+	    customization: { wardrobe: text(source.customization?.wardrobe, "classic", 40) },
+	  };
+	}
+
+	function synchronizeBrain(state) {
+	  const brain = cleanBrain(state.brain, state);
+	  brain.relationship.affection = clamp01(state.affection / 100, brain.relationship.affection);
+	  brain.drives.hunger = clamp01((100 - state.hunger) / 100);
+	  brain.drives.energy = clamp01((100 - state.energy) / 100);
+	  brain.drives.boredom = clamp01((100 - state.happiness) / 100);
+	  brain.drives.cleanliness = clamp01(state.mess / 5);
+	  brain.drives.affection = clamp01((100 - state.affection) / 100);
+	  brain.stats.level = state.level; brain.stats.experience = state.xp; brain.stats.health = state.health; brain.stats.maxHealth = 100;
+	  brain.stats.stamina = state.energy; brain.stats.maxStamina = 100;
+	  return brain;
+	}
+
+	function cleanBuddyState(value = {}, now = Date.now()) {
+	  const current = isRecord$1(value) ? value : {};
+	  const lifecycle = {
+	    version: BUDDY_BRAIN_STATE_VERSION,
+	    hunger: clamp$1(finite(current.hunger, 80), 0, 100), energy: clamp$1(finite(current.energy, 80), 0, 100),
+	    happiness: clamp$1(finite(current.happiness, 80), 0, 100), affection: clamp$1(finite(current.affection, 50), 0, 100),
+	    health: clamp$1(finite(current.health, 100), 0, 100), mess: clamp$1(integer(current.mess), 0, 5),
+	    messProgressMs: clamp$1(finite(current.messProgressMs, 0), 0, MESS_INTERVAL_MS - 1), isSick: current.isSick === true,
+	    medicineDoses: clamp$1(integer(current.medicineDoses), 0, 1), careMistakes: integer(current.careMistakes),
+	    bornAt: Math.max(0, finite(current.bornAt, now)), stage: ["hatchling", "growing", "companion", "beloved"].includes(current.stage) ? current.stage : "hatchling",
+	    deadAt: Math.max(0, finite(current.deadAt, 0)), deathReason: ["", "neglect", "sickness"].includes(current.deathReason) ? current.deathReason : "",
+	    level: Math.max(1, integer(current.level, 1)), xp: integer(current.xp), careCounts: careCounts(current.careCounts),
+	    lastSeenAt: Math.max(0, finite(current.lastSeenAt, now)), sleptUntil: Math.max(0, finite(current.sleptUntil, 0)), lastActionAt: Math.max(0, finite(current.lastActionAt, 0)),
+	    brain: null,
+	  };
+	  lifecycle.brain = synchronizeBrain({ ...lifecycle, brain: current.brain });
+	  return lifecycle;
+	}
+
+	function getBuddyMood(state, now = Date.now()) {
+	  if (state.deadAt > 0) return "dead";
+	  if (state.isSick) return "sick";
+	  if (state.mess >= 3) return "dirty";
+	  if (now < state.sleptUntil) return "sleeping";
+	  if (state.hunger < 30) return "hungry";
+	  if (state.energy < 30) return "tired";
+	  if (state.happiness < 30) return "bored";
+	  if ((state.hunger + state.energy + state.happiness + state.affection) / 4 >= 75) return "happy";
+	  return "content";
+	}
+
+	function dominantNeed(state) {
+	  const scores = [
+	    ["food", 100 - state.hunger], ["sleep", 100 - state.energy], ["play", 100 - state.happiness], ["love", 100 - state.affection], ["clean", state.mess * 20],
+	  ];
+	  return scores.sort((a, b) => b[1] - a[1])[0][0];
+	}
+
+	function resolveBuddyStage(state, now = Date.now()) {
+	  const ageMs = Math.max(0, now - (state.bornAt || now));
+	  if (state.level >= 10 && state.affection >= 85 && state.careMistakes <= 2) return "beloved";
+	  if (ageMs >= 7 * DAY_MS && state.level >= 5) return "companion";
+	  if (ageMs >= DAY_MS || state.level >= 3) return "growing";
+	  return "hatchling";
+	}
+
+	function addXp(state, amount) {
+	  let xp = state.xp + amount, level = state.level, leveledUp = false;
+	  while (xp >= level * 50) { xp -= level * 50; level += 1; leveledUp = true; }
+	  return { xp, level, leveledUp };
+	}
+
+	function applyBuddyDecay(state, elapsedMs, now = Date.now(), classicLifecycle = false) {
+	  const current = cleanBuddyState(state, now);
+	  if (current.deadAt > 0) return current;
+	  const bounded = clamp$1(finite(elapsedMs, 0), 0, MAX_CATCHUP_MS);
+	  const lastSeen = current.lastSeenAt || Math.max(0, now - bounded);
+	  const sleepMs = Math.min(bounded, current.sleptUntil > lastSeen ? Math.max(0, Math.min(current.sleptUntil, now) - lastSeen) : 0);
+	  const wakeMs = Math.max(0, bounded - sleepMs), sleepHours = sleepMs / HOUR_MS, wakeHours = wakeMs / HOUR_MS, totalHours = bounded / HOUR_MS;
+	  const hunger = clamp$1(current.hunger - wakeHours * 2 - sleepHours * 2, 0, 100);
+	  const energy = clamp$1(current.energy - wakeHours * 3 + sleepHours * 15, 0, 100);
+	  const happiness = clamp$1(current.happiness - wakeHours * 2 - sleepHours * 0.5, 0, 100);
+	  const affection = clamp$1(current.affection - wakeHours, 0, 100);
+	  const totalMess = current.messProgressMs + wakeMs, messGain = Math.floor(totalMess / MESS_INTERVAL_MS), mess = clamp$1(current.mess + messGain, 0, 5);
+	  const messProgressMs = totalMess % MESS_INTERVAL_MS;
+	  const critical = hunger <= 0 || energy <= 0 || happiness <= 0;
+	  const sicknessTriggered = mess >= 4 || (hunger <= 0 && happiness <= 0);
+	  const isSick = current.isSick || sicknessTriggered;
+	  let health = current.health;
+	  if (current.isSick) health -= totalHours * 4;
+	  else if (sicknessTriggered) health -= Math.min(totalHours, 6) * 4;
+	  if (mess >= 3) health -= totalHours;
+	  if (hunger <= 0) health -= wakeHours * 2;
+	  if (happiness <= 0) health -= wakeHours;
+	  if (energy <= 0) health -= wakeHours;
+	  if (!isSick && mess < 3 && !critical) health += sleepHours + wakeHours * 0.5;
+	  health = clamp$1(health, 0, 100);
+	  let deadAt = current.deadAt, deathReason = current.deathReason;
+	  if (health <= 0 && classicLifecycle) { deadAt = now; deathReason = isSick ? "sickness" : "neglect"; }
+	  else if (health <= 0) health = 10;
+	  const next = cleanBuddyState({ ...current, hunger, energy, happiness, affection, health, mess, messProgressMs, isSick, deadAt, deathReason, lastSeenAt: now }, now);
+	  next.stage = resolveBuddyStage(next, now);
+	  return cleanBuddyState(next, now);
+	}
+
+	function recordAction(state, action, now, relationship = {}) {
+	  const next = cleanBuddyState(state, now), brain = structuredClone(next.brain);
+	  brain.actionCounts[action] = integer(brain.actionCounts[action]) + 1;
+	  brain.lastActions = [...brain.lastActions, action].slice(-16);
+	  brain.workingMemory = [...brain.workingMemory, { action, at: now }].slice(-32);
+	  for (const [key, delta] of Object.entries(relationship)) if (key in brain.relationship) brain.relationship[key] = clamp01(brain.relationship[key] + delta);
+	  return cleanBuddyState({ ...next, affection: brain.relationship.affection * 100, brain, lastActionAt: now, lastSeenAt: now }, now);
+	}
+
+	function createBrainSnapshot(state, now = Date.now()) {
+	  const clean = cleanBuddyState(state, now);
+	  return {
+	    version: clean.version, buddyId: clean.brain.buddyId, displayName: clean.brain.displayName, mood: getBuddyMood(clean, now), dominantNeed: dominantNeed(clean),
+	    stage: clean.stage, level: clean.level, xp: clean.xp, bornAt: clean.bornAt,
+	    lifecycle: { hunger: clean.hunger, energy: clean.energy, happiness: clean.happiness, affection: clean.affection, health: clean.health, mess: clean.mess, isSick: clean.isSick, sleptUntil: clean.sleptUntil },
+	    brain: structuredClone(clean.brain), careCounts: { ...clean.careCounts }, updatedAt: clean.lastSeenAt || now,
+	  };
+	}
+
+	function performCare(state, action, now) {
+	  let current = cleanBuddyState(state, now);
+	  if (current.deadAt > 0 && action !== "start-over") return { state: current, reaction: "error", message: "I need a fresh start before we can do that." };
+	  if (action !== "nap") current.sleptUntil = 0;
+	  let relationship = {}, reaction = "idle", message = "Okay!";
+	  let xpAmount = 0;
+	  switch (action) {
+	    case "feed":
+	      if (current.isSick) return { state: current, reaction: "error", message: "I don’t feel well enough to eat much. Medicine first?" };
+	      current.hunger = Math.min(100, current.hunger + 25); current.health = Math.min(100, current.health + 2); current.careCounts.fed += 1;
+	      relationship = { trust: 0.01, familiarity: 0.005 }; reaction = "celebrating"; message = "Snack acquired. Excellent human work."; xpAmount = 5; break;
+	    case "play":
+	      if (current.isSick) return { state: current, reaction: "error", message: "I’m feeling gross. Can we fix that before zoomies?" };
+	      current.happiness = Math.min(100, current.happiness + 25); current.energy = Math.max(0, current.energy - 15); current.health = Math.min(100, current.health + 1); current.careCounts.played += 1;
+	      relationship = { familiarity: 0.015, affection: 0.01 }; reaction = "celebrating"; message = "Okay that ruled. Again later."; xpAmount = 5; break;
+	    case "pet":
+	      current.affection = Math.min(100, current.affection + 15); current.happiness = Math.min(100, current.happiness + 10); current.health = Math.min(100, current.health + 1); current.careCounts.petted += 1;
+	      relationship = { trust: 0.01, familiarity: 0.01 }; reaction = "waving"; message = "Hehe. Yep, that’s the spot."; xpAmount = 3; break;
+	    case "nap":
+	      current.energy = Math.min(100, current.energy + 40); current.health = Math.min(100, current.health + 3); current.sleptUntil = now + 15 * MINUTE_MS; current.careCounts.napped += 1;
+	      relationship = { trust: 0.005 }; reaction = "waiting"; message = "Tiny nap. Important business."; xpAmount = 5; break;
+	    case "clean":
+	      if (current.mess <= 0) return { state: current, reaction: "idle", message: "Already squeaky clean." };
+	      current.mess = 0; current.messProgressMs = 0; current.health = Math.min(100, current.health + 10); current.affection = Math.min(100, current.affection + 5); current.careCounts.cleaned += 1;
+	      relationship = { trust: 0.01, respect: 0.005 }; reaction = "celebrating"; message = "Fresh! I feel approximately 90% more majestic."; xpAmount = 4; break;
+	    case "medicine": {
+	      if (!current.isSick) return { state: current, reaction: "idle", message: "I don’t need medicine right now." };
+	      const nextDose = current.medicineDoses + 1, cured = nextDose >= 2;
+	      current.isSick = !cured; current.medicineDoses = cured ? 0 : nextDose; current.health = Math.min(100, current.health + (cured ? 25 : 5)); current.careCounts.medicated += 1;
+	      relationship = { trust: 0.02, respect: 0.01 }; reaction = cured ? "celebrating" : "waiting"; message = cured ? "Much better. Thank you." : "Bleh. One dose down."; xpAmount = cured ? 6 : 2; break;
+	    }
+	    case "start-over":
+	      if (current.deadAt <= 0) return { state: current, reaction: "idle", message: "I’m still right here! No reset needed." };
+	      current = cleanBuddyState({ bornAt: now, lastSeenAt: now, careCounts: { restarted: current.careCounts.restarted + 1 }, brain: current.brain }, now);
+	      reaction = "celebrating"; message = "New chapter. Same Buddy."; break;
+	    default: return { state: current, reaction: "idle", message: "I’m not sure what that action means yet." };
+	  }
+	  const xp = addXp(current, xpAmount); current.xp = xp.xp; current.level = xp.level;
+	  current = recordAction(current, action, now, relationship); current.stage = resolveBuddyStage(current, now);
+	  return { state: cleanBuddyState(current, now), reaction, message: xp.leveledUp ? `Level ${current.level}! ${message}` : message };
+	}
+
+	function replyFor(state, message) {
+	  const mood = getBuddyMood(state), lower = message.toLowerCase(), name = state.brain.displayName || "Buddy";
+	  if (/\b(hello|hey|hi|yo)\b/.test(lower)) return `Hey! ${name} reporting for tiny-duty.`;
+	  if (/how are you|how're you|status|feel/.test(lower)) {
+	    const need = dominantNeed(state);
+	    return mood === "happy" ? "Pretty great, actually." : `I’m ${mood}. My biggest need right now is ${need}.`;
+	  }
+	  if (/hungry|food|snack|eat/.test(lower)) return state.hunger < 50 ? "Food sounds extremely correct right now." : "I’m okay on food, but I will never disrespect a snack.";
+	  if (/home|house/.test(lower)) return "Home is our little place. We can play together, or you can put it in Idle and let us do our own thing.";
+	  if (/love|cute|good buddy|good boy|good girl/.test(lower)) return "Okay wow. Logging that directly into the friendship database.";
+	  if (/remember|memory/.test(lower)) return state.brain.notes.length ? `I’ve got ${state.brain.notes.length} saved note${state.brain.notes.length === 1 ? "" : "s"} and I remember our recent actions.` : "I remember our care, relationship, and recent actions. You can also save notes for me.";
+	  const playful = state.brain.personality.playfulness >= 0.6;
+	  return playful ? ["I’m listening.", "Interesting. Continue, human.", "I have placed this thought in my extremely serious tiny brain.", "Okay. Counterpoint: snack?"][state.brain.actionCounts.talk % 4] : "I’m here. Tell me more.";
+	}
+
+	function createBuddyBrain(storage, { onChange = () => {}, onReaction = () => {} } = {}) {
+	  let state = cleanBuddyState({}, Date.now());
+	  let saveTimer = null;
+	  async function persistSoon() {
+	    if (saveTimer) clearTimeout(saveTimer);
+	    saveTimer = setTimeout(() => { void storage.setJson(STATE_KEY, state); saveTimer = null; }, 120);
+	  }
+	  async function commit(next, reaction = null) {
+	    state = cleanBuddyState(next, Date.now());
+	    await persistSoon(); onChange(createBrainSnapshot(state)); if (reaction) onReaction(reaction); return createBrainSnapshot(state);
+	  }
+	  return {
+	    async load() {
+	      const saved = await storage.getJson(STATE_KEY, null);
+	      state = cleanBuddyState(saved ?? {}, Date.now());
+	      const elapsed = Math.max(0, Date.now() - state.lastSeenAt);
+	      state = applyBuddyDecay(state, elapsed, Date.now(), false);
+	      await storage.setJson(STATE_KEY, state); onChange(createBrainSnapshot(state)); return createBrainSnapshot(state);
+	    },
+	    snapshot() { return createBrainSnapshot(state); },
+	    async tick(now = Date.now()) {
+	      const elapsed = Math.max(0, now - state.lastSeenAt);
+	      if (elapsed < MINUTE_MS) return createBrainSnapshot(state, now);
+	      return commit(applyBuddyDecay(state, elapsed, now, false));
+	    },
+	    async care(action, now = Date.now()) {
+	      const result = performCare(state, action, now);
+	      await commit(result.state, result.reaction);
+	      return { ...result, snapshot: createBrainSnapshot(state, now) };
+	    },
+	    async rename(name, now = Date.now()) {
+	      const clean = cleanBuddyState(state, now), brain = structuredClone(clean.brain);
+	      brain.displayName = text(name, brain.displayName, 64);
+	      return commit(recordAction({ ...clean, brain }, "profile-update", now));
+	    },
+	    async addNote(note, now = Date.now()) {
+	      const clean = cleanBuddyState(state, now), value = text(note, "", 500); if (!value) return createBrainSnapshot(clean);
+	      const brain = structuredClone(clean.brain); brain.notes = [...brain.notes, value].slice(-100);
+	      return commit(recordAction({ ...clean, brain }, "note-add", now));
+	    },
+	    async talk(message, now = Date.now()) {
+	      const input = text(message, "", 500); if (!input) return { reply: "", snapshot: createBrainSnapshot(state, now) };
+	      let clean = cleanBuddyState(state, now), brain = structuredClone(clean.brain);
+	      brain.messages = [...brain.messages, { role: "user", text: input, at: now }].slice(-80);
+	      clean = recordAction({ ...clean, brain }, "talk", now, { familiarity: 0.002 });
+	      const reply = replyFor(clean, input); brain = structuredClone(clean.brain);
+	      brain.messages = [...brain.messages, { role: "buddy", text: reply, at: now }].slice(-80);
+	      await commit({ ...clean, brain }, "thinking");
+	      return { reply, snapshot: createBrainSnapshot(state, now) };
+	    },
+	  };
+	}
+
+	const EOCD_SIGNATURE = 0x06054b50;
+	const CENTRAL_SIGNATURE = 0x02014b50;
+	const LOCAL_SIGNATURE = 0x04034b50;
+	const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024;
+	const MAX_EXTRACTED_BYTES = 750 * 1024 * 1024;
+	const MAX_ENTRY_BYTES = 100 * 1024 * 1024;
+	const MAX_ENTRIES = 20_000;
+
+	function u16(view, offset) { return view.getUint16(offset, true); }
+	function u32(view, offset) { return view.getUint32(offset, true); }
+
+	function safePath(path) {
+	  if (!path || path.includes("\\") || path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.includes("\0")) throw new Error(`Unsafe ZIP path: ${path || "<empty>"}`);
+	  const parts = path.split("/");
+	  if (parts.some((part) => part === "" || part === "." || part === "..")) throw new Error(`Unsafe ZIP path: ${path}`);
+	  return parts.join("/");
+	}
+
+	function findEocd(view) {
+	  const minimum = Math.max(0, view.byteLength - 65_557);
+	  for (let offset = view.byteLength - 22; offset >= minimum; offset -= 1) {
+	    if (u32(view, offset) === EOCD_SIGNATURE) return offset;
+	  }
+	  throw new Error("ZIP end-of-central-directory record was not found.");
+	}
+
+	async function inflateRaw(bytes) {
+	  if (typeof DecompressionStream !== "function") throw new Error("This browser cannot decompress ZIP files yet.");
+	  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+	  return new Uint8Array(await new Response(stream).arrayBuffer());
+	}
+
+	function utf8(bytes) { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+
+	async function sha256Hex(buffer) {
+	  const digest = await crypto.subtle.digest("SHA-256", buffer);
+	  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+	}
+
+	function pngDimensions(bytes) {
+	  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+	  if (data.length < 24 || data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4e || data[3] !== 0x47) throw new Error("Frame is not a PNG.");
+	  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+	  return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+	}
+
+	function findMetadataRoot(paths) {
+	  const candidates = [...paths].filter((path) => path === "metadata.json" || path.endsWith("/metadata.json"));
+	  if (candidates.length !== 1) throw new Error(candidates.length ? "ZIP has more than one metadata.json." : "ZIP is missing metadata.json.");
+	  return candidates[0] === "metadata.json" ? "" : candidates[0].slice(0, -"/metadata.json".length);
+	}
+
+	async function openZipArchive(arrayBuffer) {
+	  if (!(arrayBuffer instanceof ArrayBuffer)) throw new Error("ZIP input must be an ArrayBuffer.");
+	  if (arrayBuffer.byteLength <= 0 || arrayBuffer.byteLength > MAX_ARCHIVE_BYTES) throw new Error("ZIP is empty or too large.");
+	  const view = new DataView(arrayBuffer), eocd = findEocd(view);
+	  const disk = u16(view, eocd + 4), centralDisk = u16(view, eocd + 6);
+	  const entriesOnDisk = u16(view, eocd + 8), entryCount = u16(view, eocd + 10);
+	  const centralSize = u32(view, eocd + 12), centralOffset = u32(view, eocd + 16);
+	  if (disk !== 0 || centralDisk !== 0 || entriesOnDisk !== entryCount) throw new Error("Multi-disk ZIP archives are not supported.");
+	  if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) throw new Error("ZIP64 archives are not supported.");
+	  if (entryCount > MAX_ENTRIES) throw new Error("ZIP contains too many files.");
+	  if (centralOffset + centralSize > arrayBuffer.byteLength) throw new Error("ZIP central directory is outside the archive.");
+
+	  const decoder = new TextDecoder("utf-8", { fatal: true });
+	  const byName = new Map(), folded = new Set();
+	  let cursor = centralOffset, extractedTotal = 0;
+	  for (let index = 0; index < entryCount; index += 1) {
+	    if (cursor + 46 > arrayBuffer.byteLength || u32(view, cursor) !== CENTRAL_SIGNATURE) throw new Error("ZIP central directory is malformed.");
+	    const flags = u16(view, cursor + 8), method = u16(view, cursor + 10), crc32 = u32(view, cursor + 16);
+	    const compressedSize = u32(view, cursor + 20), uncompressedSize = u32(view, cursor + 24);
+	    const nameLength = u16(view, cursor + 28), extraLength = u16(view, cursor + 30), commentLength = u16(view, cursor + 32), localOffset = u32(view, cursor + 42);
+	    const end = cursor + 46 + nameLength + extraLength + commentLength;
+	    if (end > arrayBuffer.byteLength) throw new Error("ZIP central directory entry is truncated.");
+	    if ((flags & 0x1) !== 0) throw new Error("Encrypted ZIP entries are not supported.");
+	    if (method !== 0 && method !== 8) throw new Error(`Unsupported ZIP compression method: ${method}.`);
+	    if (uncompressedSize > MAX_ENTRY_BYTES) throw new Error("ZIP entry is too large.");
+	    extractedTotal += uncompressedSize;
+	    if (extractedTotal > MAX_EXTRACTED_BYTES) throw new Error("ZIP extracted size is too large.");
+	    const rawName = new Uint8Array(arrayBuffer, cursor + 46, nameLength);
+	    const name = decoder.decode(rawName);
+	    if (!name.endsWith("/")) {
+	      const normalized = safePath(name), fold = normalized.toLocaleLowerCase("en-US");
+	      if (byName.has(normalized) || folded.has(fold)) throw new Error(`ZIP contains duplicate or case-colliding path: ${normalized}`);
+	      byName.set(normalized, { name: normalized, method, flags, crc32, compressedSize, uncompressedSize, localOffset });
+	      folded.add(fold);
+	    }
+	    cursor = end;
+	  }
+
+	  async function read(name) {
+	    const entry = byName.get(name);
+	    if (!entry) throw new Error(`ZIP entry is missing: ${name}`);
+	    const offset = entry.localOffset;
+	    if (offset + 30 > arrayBuffer.byteLength || u32(view, offset) !== LOCAL_SIGNATURE) throw new Error(`ZIP local header is malformed: ${name}`);
+	    const localFlags = u16(view, offset + 6), localMethod = u16(view, offset + 8), nameLength = u16(view, offset + 26), extraLength = u16(view, offset + 28);
+	    if ((localFlags & 0x1) !== 0 || localMethod !== entry.method) throw new Error(`ZIP local header disagrees with central directory: ${name}`);
+	    const dataStart = offset + 30 + nameLength + extraLength, dataEnd = dataStart + entry.compressedSize;
+	    if (dataEnd > arrayBuffer.byteLength) throw new Error(`ZIP entry is truncated: ${name}`);
+	    const compressed = new Uint8Array(arrayBuffer, dataStart, entry.compressedSize);
+	    const result = entry.method === 0 ? new Uint8Array(compressed) : await inflateRaw(compressed);
+	    if (result.byteLength !== entry.uncompressedSize) throw new Error(`ZIP entry size mismatch: ${name}`);
+	    return result;
+	  }
+
+	  async function readText(name, maximum = 1024 * 1024) {
+	    const entry = byName.get(name);
+	    if (!entry) throw new Error(`ZIP entry is missing: ${name}`);
+	    if (entry.uncompressedSize > maximum) throw new Error(`ZIP text entry is too large: ${name}`);
+	    return utf8(await read(name));
+	  }
+
+	  return { paths: new Set(byName.keys()), entries: byName, read, readText, bytes: arrayBuffer.byteLength };
+	}
+
+	const CANONICAL_DIRECTIONS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+
+	const PRISMTEK_PACK_RECIPES = Object.freeze([
+	  {
+	    id: "pixellab-balinese-cat", displayName: "Balinese Cat", kind: "buddy", archiveName: "Balinese_Cat-2.zip",
+	    sha256: "87a63f2f1a540ef06c0f6684cbf7026e869211857091d07b6219dac17ad0f657", width: 60, height: 60,
+	    includeStates: ["Idle", "laying_down_on_stoma", "sitting_down", "Napping"],
+	    semanticDefaults: { idle: "Idle", running: "Running", waiting: "[state] sitting_down", failed: "The_cat_lowers_its_head_toward_the_floor_tucking_i" },
+	  },
+	  {
+	    id: "pixellab-shiba-inu", displayName: "Shiba Inu", kind: "buddy", archiveName: "Shiba_Inu-2.zip",
+	    sha256: "e76cc58d2a5b776c0f8ba1ebd4d9b7dd3c31833a994e75603deccfa1393eecf7", width: 56, height: 56,
+	    includeStates: ["Idle", "sitting_down", "Sleeping"],
+	    semanticDefaults: { idle: "Idle", running: "Running", waiting: "[state] sitting_down", failed: "The_dog_lowers_its_head_toward_the_ground_moving_i" },
+	  },
+	  {
+	    id: "pixellab-green-trex", displayName: "Chunky Green T-Rex", kind: "buddy", archiveName: "A_stout_vibrant_green_T-Rex_with_a_rounded_chunky-2.zip",
+	    sha256: "a50f9f0a4beab34f035c332de7b8bd1055eef543d20d676c8c6b0da06d7458c8", width: 116, height: 116,
+	    includeStates: ["Adult", "Baby", "Adolescent"],
+	    semanticDefaults: { idle: "Idle", running: "Walking", failed: "The_dinosaur_winces_and_closes_its_eyes_its_head_s" },
+	  },
+	  {
+	    id: "pixellab-ani-isometric-human", displayName: "Ani Isometric Human", kind: "human", archiveName: "Ani_Iso_Human.zip",
+	    sha256: "411deb03312a4bbc2dd39ccad069fa143e38184e409819d8a0a23001baef5723", width: 100, height: 100,
+	    includeStates: ["Idle"],
+	    semanticDefaults: {
+	      idle: "The_boy_stands_in_a_relaxed_upright_position_and_g", running: "ani_run", waiting: "The_boy_stands_in_a_relaxed_upright_position_and_g", jumping: "ani_jump", failed: "ani_fall",
+	    },
+	  },
+	]);
+	const OPENPETS_GALLERY_URL = "https://openpets.dev/pets";
+
+	function recipeByHash(hash) { return PRISMTEK_PACK_RECIPES.find((recipe) => recipe.sha256 === hash) ?? null; }
+	function recipeByArchiveName(name) { return PRISMTEK_PACK_RECIPES.find((recipe) => recipe.archiveName === name) ?? null; }
+
+	function humanizeAnimationName(name) {
+	  return String(name).replace(/^\[state\]\s*/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().replace(/\b\w/g, (char) => char.toUpperCase());
+	}
+
+	function normalizeAnimationId(name) {
+	  const normalized = String(name).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+	  return normalized || "animation";
+	}
+
+	function inferSemanticTags(name, state = "") {
+	  const value = `${name} ${state}`.toLowerCase(), tags = [];
+	  for (const tag of ["idle", "run", "running", "walk", "jump", "roll", "punch", "death", "fall", "bark", "sleep", "nap", "sit", "wince", "lunge", "wave", "review", "wait", "eat", "eating", "food"]) {
+	    if (value.includes(tag)) tags.push(tag === "eat" || tag === "food" ? "eating" : tag);
+	  }
+	  return [...new Set(tags)];
+	}
+
+	function inferDurationMs(name) {
+	  const value = String(name).toLowerCase();
+	  if (value.includes("run") || value.includes("sprint")) return 680;
+	  if (value.includes("walk")) return 880;
+	  if (/jump|roll|punch/.test(value)) return 700;
+	  if (/death|fall|wince/.test(value)) return 1050;
+	  if (/eat|eating|food/.test(value)) return 1100;
+	  return 1000;
+	}
+
+	function inferSemanticDefaults(animations) {
+	  const complete = animations.filter((animation) => animation.complete !== false);
+	  const find = (...tests) => complete.find((animation) => tests.some((test) => test.test(`${animation.id} ${animation.originalName} ${(animation.semanticTags ?? []).join(" ")}`.toLowerCase())))?.id;
+	  const idle = find(/^idle\b/, /\bidle\b/) ?? complete[0]?.id;
+	  return {
+	    idle,
+	    running: find(/\bani-run\b/, /\brunning\b/, /\bwalking\b/) ?? idle,
+	    review: find(/review|think|head|curious|wince/) ?? idle,
+	    waiting: find(/wait|sitting|sleep|nap|relaxed/) ?? idle,
+	    waving: find(/wave/) ?? idle,
+	    jumping: find(/jump/) ?? idle,
+	    failed: find(/failed|wince|fall|slump|head/) ?? idle,
+	    eating: find(/eat|eating|food/) ?? undefined,
+	  };
+	}
+
+	const INSTALLED_KEY = "pets.installed.v1";
+	const ACTIVE_KEY = "pets.active.v1";
+	const HUMAN_KEY = "home.human.v1";
+	const PET_ID = /^[a-z0-9][a-z0-9._-]{1,62}[a-z0-9]$/;
+
+	function isRecord(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
+	function safeText(value, fallback = "", maximum = 500) { return (typeof value === "string" ? value.trim() : fallback).slice(0, maximum); }
+	function resolveArchivePath(zip, root, path) {
+	  if (typeof path !== "string" || !path) throw new Error("Pet manifest references an invalid asset path.");
+	  if (zip.paths.has(path)) return path;
+	  const rooted = root ? `${root}/${path}` : path;
+	  if (zip.paths.has(rooted)) return rooted;
+	  throw new Error(`Pet archive is missing referenced asset: ${path}`);
+	}
+	function uniqueId(base, identity, used) {
+	  let id = normalizeAnimationId(base), suffix = 1;
+	  while (used.has(id) && used.get(id) !== identity) id = `${normalizeAnimationId(base).slice(0, 112)}-${suffix++}`;
+	  used.set(id, identity); return id;
+	}
+	function frameIndex$1(path) {
+	  const match = String(path).match(/(?:^|\/)frame_(\d+)\.png$/i);
+	  return match ? Number(match[1]) : null;
+	}
+	function indexesComplete(paths) {
+	  const indexes = paths.map(frameIndex$1).filter((value) => Number.isInteger(value));
+	  if (!indexes.length) return true;
+	  const set = new Set(indexes), max = Math.max(...indexes);
+	  for (let index = 0; index <= max; index += 1) if (!set.has(index)) return false;
+	  return true;
+	}
+
+	async function validateFrameSet(zip, paths, width, height) {
+	  for (const path of paths) {
+	    const bytes = await zip.read(path), size = pngDimensions(bytes);
+	    if (size.width !== width || size.height !== height) throw new Error(`Frame ${path} is ${size.width}×${size.height}; expected ${width}×${height}.`);
+	  }
+	}
+
+	function resolveRequestedAnimation(requested, animations) {
+	  if (!requested) return undefined;
+	  return animations.find((animation) => animation.originalName === requested || animation.id === requested)?.id;
+	}
+
+	async function importPixelLab(file, arrayBuffer, storage, zip, hash) {
+	  const root = findMetadataRoot(zip.paths), metadataPath = root ? `${root}/metadata.json` : "metadata.json";
+	  const metadata = JSON.parse(await zip.readText(metadataPath, 2 * 1024 * 1024));
+	  if (!isRecord(metadata) || metadata.export_version !== "3.1" || !Array.isArray(metadata.states) || metadata.states.length < 1) throw new Error("This is not a supported PixelLab export 3.1 archive.");
+
+	  const byName = recipeByArchiveName(file.name), byHash = recipeByHash(hash);
+	  if (byName && hash !== byName.sha256) throw new Error(`${file.name} does not match the canonical ${byName.displayName} SHA-256.`);
+	  if (byHash && file.name !== byHash.archiveName) throw new Error(`Canonical ${byHash.displayName} must be imported as ${byHash.archiveName}.`);
+	  const recipe = byName ?? byHash;
+	  const selectedStates = (metadata.states ?? []).filter((state) => {
+	    if (!isRecord(state) || typeof state.folder !== "string") return false;
+	    return !recipe?.includeStates || recipe.includeStates.includes(state.folder);
+	  });
+	  if (!selectedStates.length) throw new Error("PixelLab archive contains no selected states.");
+
+	  const firstCharacter = selectedStates.map((state) => state.character).find((character) => isRecord(character) && isRecord(character.size));
+	  const width = Number(firstCharacter?.size?.width), height = Number(firstCharacter?.size?.height);
+	  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > 512 || height > 512) throw new Error("PixelLab archive has invalid native frame dimensions.");
+	  if (recipe && (width !== recipe.width || height !== recipe.height)) throw new Error(`${recipe.displayName} is ${width}×${height}; expected ${recipe.width}×${recipe.height}.`);
+
+	  const animations = [], used = new Map();
+	  for (const state of selectedStates) {
+	    const stateName = state.folder, rotations = state.frames?.rotations ?? {};
+	    if (isRecord(rotations) && Object.keys(rotations).length) {
+	      const originalName = `[state] ${stateName}`, id = uniqueId(`state-${stateName}`, `${stateName}:rotations`, used), frames = {};
+	      for (const direction of CANONICAL_DIRECTIONS) {
+	        const rawPath = rotations[direction]; if (typeof rawPath !== "string") continue;
+	        frames[direction] = [resolveArchivePath(zip, root, rawPath)];
+	      }
+	      const directions = CANONICAL_DIRECTIONS.filter((direction) => frames[direction]?.length);
+	      animations.push({ id, originalName, label: humanizeAnimationName(stateName), state: stateName, frames, directions, durationMs: 1000, iterations: "infinite", loopMode: "loop", semanticTags: ["state", "pose"], complete: directions.length === 8 });
+	    }
+	    const sourceAnimations = state.frames?.animations ?? {};
+	    if (!isRecord(sourceAnimations)) continue;
+	    for (const [originalName, directionFrames] of Object.entries(sourceAnimations)) {
+	      if (!isRecord(directionFrames)) continue;
+	      const id = uniqueId(originalName, `${stateName}:${originalName}`, used), frames = {};
+	      for (const direction of CANONICAL_DIRECTIONS) {
+	        const rawPaths = directionFrames[direction]; if (!Array.isArray(rawPaths)) continue;
+	        const paths = rawPaths.filter((path) => typeof path === "string").map((path) => resolveArchivePath(zip, root, path));
+	        if (paths.length) frames[direction] = paths;
+	      }
+	      const directions = CANONICAL_DIRECTIONS.filter((direction) => frames[direction]?.length);
+	      const complete = directions.length === 8 && directions.every((direction) => indexesComplete(frames[direction]));
+	      animations.push({
+	        id, originalName, label: humanizeAnimationName(originalName), state: stateName, frames, directions,
+	        durationMs: inferDurationMs(originalName), iterations: /jump|roll|punch|death|fall|wince|lunge|bark|wave/i.test(originalName) ? 1 : "infinite",
+	        loopMode: /jump|roll|punch|death|fall|wince|lunge|bark|wave/i.test(originalName) ? "recover" : "loop",
+	        semanticTags: inferSemanticTags(originalName, stateName), complete,
+	      });
+	    }
+	  }
+	  if (!animations.length) throw new Error("PixelLab archive contains no importable animations.");
+
+	  const uniqueFrames = new Set();
+	  for (const animation of animations) for (const paths of Object.values(animation.frames)) for (const path of paths) uniqueFrames.add(path);
+	  await validateFrameSet(zip, [...uniqueFrames], width, height);
+
+	  const inferred = inferSemanticDefaults(animations), semanticDefaults = { ...inferred };
+	  for (const [semantic, requested] of Object.entries(recipe?.semanticDefaults ?? {})) {
+	    const resolved = resolveRequestedAnimation(requested, animations);
+	    if (resolved && animations.find((animation) => animation.id === resolved)?.complete) semanticDefaults[semantic] = resolved;
+	  }
+	  const idleId = semanticDefaults.idle ?? animations.find((animation) => animation.complete)?.id ?? animations[0].id;
+	  const idle = animations.find((animation) => animation.id === idleId) ?? animations[0];
+	  const previewDirection = idle.frames.south?.length ? "south" : idle.directions[0];
+	  const previewPath = idle.frames[previewDirection]?.[0];
+	  if (!previewPath) throw new Error("PixelLab pet has no preview frame.");
+
+	  const archiveLabel = file.name.replace(/\.zip$/i, "").replace(/-2$/i, "").replace(/[_-]+/g, " ").trim();
+	  const rawCharacterName = safeText(selectedStates.map((item) => item.character?.name).find((name) => typeof name === "string" && name.trim()), "", 80);
+	  const genericNames = new Set(["idle", "adult", "baby", "adolescent", "default", "main", "sitting", "sleeping"]);
+	  const displayName = recipe?.displayName ?? (rawCharacterName && !genericNames.has(rawCharacterName.toLowerCase()) ? rawCharacterName : archiveLabel || "Imported Buddy");
+	  const id = recipe?.id ?? `pixellab-${normalizeAnimationId(displayName).slice(0, 48)}`;
+	  const pack = {
+	    version: 1, id, displayName, description: recipe ? `Prismtek canonical PixelLab Buddy: ${displayName}.` : `Imported PixelLab Buddy from ${file.name}.`,
+	    kind: recipe?.kind ?? "buddy", source: "pixellab", archiveName: file.name, archiveSha256: hash, frameWidth: width, frameHeight: height,
+	    animations, semanticDefaults, previewPath, previewDirection, importedAt: new Date().toISOString(), canonical: Boolean(recipe),
+	  };
+	  await storage.setBinary(`pet.${id}`, arrayBuffer);
+	  await upsertInstalled(storage, pack);
+	  if (pack.kind === "human") await storage.setJson(HUMAN_KEY, id);
+	  return pack;
+	}
+
+	async function imageDimensions(bytes, mime = "image/webp") {
+	  const blob = new Blob([bytes], { type: mime });
+	  if (typeof createImageBitmap === "function") {
+	    const bitmap = await createImageBitmap(blob);
+	    try { return { width: bitmap.width, height: bitmap.height }; } finally { bitmap.close(); }
+	  }
+	  return new Promise((resolve, reject) => {
+	    const url = URL.createObjectURL(blob), image = new Image();
+	    image.onload = () => { const result = { width: image.naturalWidth, height: image.naturalHeight }; URL.revokeObjectURL(url); resolve(result); };
+	    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Pet spritesheet could not be decoded.")); };
+	    image.src = url;
+	  });
+	}
+
+	async function importOpenPets(file, arrayBuffer, storage, zip, hash) {
+	  const petPaths = [...zip.paths].filter((path) => path === "pet.json" || path.endsWith("/pet.json"));
+	  if (petPaths.length !== 1) throw new Error("OpenPets package must contain exactly one pet.json.");
+	  const petPath = petPaths[0], root = petPath === "pet.json" ? "" : petPath.slice(0, -"/pet.json".length);
+	  const metadata = JSON.parse(await zip.readText(petPath, 128 * 1024));
+	  if (!isRecord(metadata) || !PET_ID.test(metadata.id) || metadata.id === "builtin") throw new Error("OpenPets pet.json has an invalid pet id.");
+	  const displayName = safeText(metadata.displayName, "", 120), description = safeText(metadata.description, "", 500);
+	  if (!displayName || !description) throw new Error("OpenPets pet.json is missing displayName or description.");
+	  const sheetPath = resolveArchivePath(zip, root, safeText(metadata.spritesheetPath, "spritesheet.webp", 240));
+	  const sheet = await zip.read(sheetPath);
+	  if (sheet.byteLength < 16 || String.fromCharCode(...sheet.subarray(0, 4)) !== "RIFF" || String.fromCharCode(...sheet.subarray(8, 12)) !== "WEBP") throw new Error("OpenPets spritesheet is not a WebP image.");
+	  const dimensions = await imageDimensions(sheet);
+	  const frameWidth = 192, frameHeight = 208, columns = 8, rows = 9;
+	  if (dimensions.width < frameWidth * columns || dimensions.height < frameHeight * rows) throw new Error(`OpenPets spritesheet is ${dimensions.width}×${dimensions.height}; expected at least ${frameWidth * columns}×${frameHeight * rows}.`);
+	  const pack = {
+	    version: 1, id: metadata.id, displayName, description, kind: "buddy", source: "openpets", archiveName: file.name, archiveSha256: hash,
+	    frameWidth, frameHeight, sheetPath, columns, rows, importedAt: new Date().toISOString(), canonical: false,
+	    standardStates: {
+	      idle: { row: 0, frames: 6, durationMs: 5500, iterations: "infinite" }, "running-right": { row: 1, frames: 8, durationMs: 1060 },
+	      "running-left": { row: 2, frames: 8, durationMs: 1060 }, waving: { row: 3, frames: 4, durationMs: 700, iterations: 2 },
+	      jumping: { row: 4, frames: 5, durationMs: 840, iterations: 2 }, failed: { row: 5, frames: 8, durationMs: 1220, iterations: 2 },
+	      waiting: { row: 6, frames: 6, durationMs: 1010 }, running: { row: 7, frames: 6, durationMs: 820 }, review: { row: 8, frames: 6, durationMs: 1030 },
+	    },
+	    semanticDefaults: { idle: "idle", running: "running", review: "review", waiting: "waiting", waving: "waving", jumping: "jumping", failed: "failed" },
+	    previewPath: sheetPath,
+	  };
+	  await storage.setBinary(`pet.${pack.id}`, arrayBuffer); await upsertInstalled(storage, pack); return pack;
+	}
+
+	async function upsertInstalled(storage, pack) {
+	  const current = await storage.getJson(INSTALLED_KEY, []), list = Array.isArray(current) ? current.filter((item) => isRecord(item) && item.id !== pack.id) : [];
+	  list.push(pack); await storage.setJson(INSTALLED_KEY, list.slice(-120));
+	}
+
+	function createPetLibrary(storage) {
+	  return {
+	    async listInstalled() { const value = await storage.getJson(INSTALLED_KEY, []); return Array.isArray(value) ? value : []; },
+	    async activeId() { return await storage.getJson(ACTIVE_KEY, "pocket-bird"); },
+	    async setActive(id) { await storage.setJson(ACTIVE_KEY, id || "pocket-bird"); },
+	    async homeHumanId() { return await storage.getJson(HUMAN_KEY, null); },
+	    async setHomeHuman(id) { await storage.setJson(HUMAN_KEY, id ?? null); },
+	    canonicalSlots() { return PRISMTEK_PACK_RECIPES.map((recipe) => ({ ...recipe })); },
+	    async importFile(file) {
+	      if (!(file instanceof Blob) || typeof file.name !== "string") throw new Error("Choose a ZIP pet package.");
+	      if (!/\.zip$/i.test(file.name)) throw new Error("Pocket Buddy imports ZIP pet packages.");
+	      if (file.size <= 0 || file.size > 250 * 1024 * 1024) throw new Error("Pet ZIP is empty or too large.");
+	      const arrayBuffer = await file.arrayBuffer(), hash = await sha256Hex(arrayBuffer), zip = await openZipArchive(arrayBuffer);
+	      const paths = [...zip.paths];
+	      if (paths.some((path) => path === "metadata.json" || path.endsWith("/metadata.json"))) return importPixelLab(file, arrayBuffer, storage, zip, hash);
+	      if (paths.some((path) => path === "pet.json" || path.endsWith("/pet.json"))) return importOpenPets(file, arrayBuffer, storage, zip, hash);
+	      throw new Error("ZIP is neither a PixelLab 3.1 export nor an OpenPets pet package.");
+	    },
+	    async loadRuntime(id) {
+	      if (!id || id === "pocket-bird") return null;
+	      const installed = await this.listInstalled(), pack = installed.find((item) => item.id === id);
+	      if (!pack) return null;
+	      const arrayBuffer = await storage.getBinary(`pet.${id}`); if (!arrayBuffer) return null;
+	      const zip = await openZipArchive(arrayBuffer); return { pack, zip };
+	    },
+	    async uninstall(id) {
+	      const list = (await this.listInstalled()).filter((item) => item.id !== id); await storage.setJson(INSTALLED_KEY, list); await storage.removeBinary(`pet.${id}`);
+	      if (await this.activeId() === id) await this.setActive("pocket-bird"); if (await this.homeHumanId() === id) await this.setHomeHuman(null);
+	    },
+	  };
+	}
+
+	const MOTION_EPSILON = 0.35;
+
+	function directionFromVector(dx, dy, fallback = "south") {
+	  if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.hypot(dx, dy) < MOTION_EPSILON) return fallback;
+	  const octant = (Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8;
+	  return ["east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east"][octant] ?? fallback;
+	}
+	function firstDirection(frames = {}) { return ["south", "south-east", "east", "north-east", "north", "north-west", "west", "south-west"].find((direction) => frames[direction]?.length); }
+	function frameIndex(durationMs, count, now) { return count <= 1 ? 0 : Math.floor((now % Math.max(1, durationMs)) / Math.max(1, durationMs / count)) % count; }
+
+	function createPetRuntime(library, shadowRoot) {
+	  const imageCache = new Map();
+	  const pending = new Map();
+	  let active = null, base = null, overlay = null, overlayCtx = null, raf = 0, lastCenter = null, lastMovedAt = 0, lastDirection = "south", forcedSemantic = null, forcedUntil = 0;
+
+	  async function imageFor(runtime, path, mime = "image/png") {
+	    const key = `${runtime.pack.id}:${path}`;
+	    if (imageCache.has(key)) return imageCache.get(key);
+	    if (pending.has(key)) return null;
+	    pending.set(key, true);
+	    try {
+	      const bytes = await runtime.zip.read(path), blob = new Blob([bytes], { type: mime });
+	      let drawable;
+	      if (typeof createImageBitmap === "function") drawable = await createImageBitmap(blob);
+	      else drawable = await new Promise((resolve, reject) => {
+	        const url = URL.createObjectURL(blob), image = new Image();
+	        image.onload = () => { URL.revokeObjectURL(url); resolve(image); }; image.onerror = () => { URL.revokeObjectURL(url); reject(new Error(`Could not decode ${path}`)); }; image.src = url;
+	      });
+	      imageCache.set(key, drawable); return drawable;
+	    } catch (error) {
+	      console.warn("Pocket Buddy: pet frame decode failed", error); return null;
+	    } finally { pending.delete(key); }
+	  }
+
+	  function ensureOverlay() {
+	    if (overlay) return;
+	    overlay = document.createElement("canvas"); overlay.id = "pocket-buddy-custom-pet";
+	    overlay.style.cssText = "position:fixed;left:0;top:0;z-index:2147483638;pointer-events:none;image-rendering:pixelated;transform-origin:bottom center;";
+	    overlayCtx = overlay.getContext("2d"); overlayCtx.imageSmoothingEnabled = false; shadowRoot.appendChild(overlay);
+	  }
+
+	  async function select(id) {
+	    if (id === "pocket-bird" || !id) {
+	      active = null; if (base) base.style.opacity = ""; if (overlay) overlay.style.display = "none"; return;
+	    }
+	    active = await library.loadRuntime(id);
+	    if (!active) { if (base) base.style.opacity = ""; if (overlay) overlay.style.display = "none"; return; }
+	    ensureOverlay(); overlay.style.display = "block"; if (base) base.style.opacity = "0";
+	    if (active.pack.source === "openpets") void imageFor(active, active.pack.sheetPath, "image/webp");
+	  }
+
+	  function resolvePixelLabFrame(runtime, semantic, direction, now) {
+	    const pack = runtime.pack;
+	    const requested = pack.semanticDefaults?.[semantic] ?? pack.semanticDefaults?.idle;
+	    const animation = pack.animations?.find((item) => item.id === requested) ?? pack.animations?.find((item) => item.complete) ?? pack.animations?.[0];
+	    if (!animation) return null;
+	    const resolvedDirection = animation.frames?.[direction]?.length ? direction : animation.frames?.south?.length ? "south" : firstDirection(animation.frames);
+	    const paths = animation.frames?.[resolvedDirection] ?? []; if (!paths.length) return null;
+	    return { path: paths[frameIndex(animation.durationMs ?? 1000, paths.length, now)], mime: "image/png", width: pack.frameWidth, height: pack.frameHeight };
+	  }
+
+	  function resolveOpenPetsFrame(runtime, semantic, direction, now) {
+	    const pack = runtime.pack;
+	    let stateId = pack.semanticDefaults?.[semantic] ?? "idle";
+	    if (semantic === "running") stateId = direction.includes("west") ? "running-left" : direction.includes("east") ? "running-right" : "running";
+	    const state = pack.standardStates?.[stateId] ?? pack.standardStates?.idle; if (!state) return null;
+	    const index = frameIndex(state.durationMs ?? 1000, state.frames ?? 1, now);
+	    return { sheetPath: pack.sheetPath, mime: "image/webp", sx: index * pack.frameWidth, sy: state.row * pack.frameHeight, width: pack.frameWidth, height: pack.frameHeight };
+	  }
+
+	  async function getFrame(runtime, semantic = "idle", direction = "south", now = Date.now()) {
+	    if (!runtime) return null;
+	    if (runtime.pack.source === "pixellab") {
+	      const frame = resolvePixelLabFrame(runtime, semantic, direction, now); if (!frame) return null;
+	      const image = await imageFor(runtime, frame.path, frame.mime); return image ? { image, sx: 0, sy: 0, sw: frame.width, sh: frame.height } : null;
+	    }
+	    const frame = resolveOpenPetsFrame(runtime, semantic, direction, now); if (!frame) return null;
+	    const image = await imageFor(runtime, frame.sheetPath, frame.mime); return image ? { image, sx: frame.sx, sy: frame.sy, sw: frame.width, sh: frame.height } : null;
+	  }
+
+	  function requestFrame(runtime, semantic, direction, now, callback) {
+	    void getFrame(runtime, semantic, direction, now).then((frame) => { if (frame) callback(frame); });
+	  }
+
+	  function drawOverlay(now) {
+	    if (!active || !base || !overlay || !overlayCtx) return;
+	    const rect = base.getBoundingClientRect(), center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+	    if (lastCenter) {
+	      const dx = center.x - lastCenter.x, dy = center.y - lastCenter.y;
+	      if (Math.hypot(dx, dy) >= MOTION_EPSILON) { lastDirection = directionFromVector(dx, dy, lastDirection); lastMovedAt = now; }
+	    }
+	    lastCenter = center;
+	    const semantic = forcedSemantic && now < forcedUntil ? forcedSemantic : (now - lastMovedAt < 140 ? "running" : "idle"), pack = active.pack, scale = rect.width / Math.max(1, base.width || 32);
+	    const width = Math.round(pack.frameWidth * scale), height = Math.round(pack.frameHeight * scale);
+	    if (overlay.width !== pack.frameWidth || overlay.height !== pack.frameHeight) { overlay.width = pack.frameWidth; overlay.height = pack.frameHeight; overlayCtx.imageSmoothingEnabled = false; }
+	    overlay.style.width = `${width}px`; overlay.style.height = `${height}px`; overlay.style.left = `${rect.left + rect.width / 2 - width / 2}px`; overlay.style.top = `${rect.bottom - height}px`;
+	    requestFrame(active, semantic, lastDirection, now, (frame) => {
+	      if (!active || !overlayCtx) return; overlayCtx.clearRect(0, 0, overlay.width, overlay.height); overlayCtx.drawImage(frame.image, frame.sx, frame.sy, frame.sw, frame.sh, 0, 0, overlay.width, overlay.height);
+	    });
+	  }
+
+	  function loop(now) { drawOverlay(now); raf = requestAnimationFrame(loop); }
+
+	  async function start() {
+	    base = shadowRoot.getElementById("birb");
+	    if (!base) return false;
+	    await select(await library.activeId());
+	    if (!raf) raf = requestAnimationFrame(loop); return true;
+	  }
+
+	  function drawRuntime(runtime, ctx, semantic, direction, now, x, y, scale = 1) {
+	    if (!runtime) return;
+	    requestFrame(runtime, semantic, direction, now, (frame) => {
+	      const width = runtime.pack.frameWidth * scale, height = runtime.pack.frameHeight * scale;
+	      ctx.save(); ctx.imageSmoothingEnabled = false; ctx.drawImage(frame.image, frame.sx, frame.sy, frame.sw, frame.sh, Math.round(x - width / 2), Math.round(y - height), Math.round(width), Math.round(height)); ctx.restore();
+	    });
+	  }
+
+	  return {
+	    start, select,
+	    react(reaction, durationMs = 1500) {
+	      const semantic = ({ thinking: "review", working: "running", editing: "running", running: "running", testing: "waiting", waiting: "waiting", waving: "waving", success: "jumping", celebrating: "jumping", error: "failed", eating: "eating", idle: "idle" })[reaction] ?? "idle";
+	      forcedSemantic = semantic; forcedUntil = performance.now() + Math.max(200, durationMs);
+	    },
+	    activePack() { return active?.pack ?? null; },
+	    activeRuntime() { return active; },
+	    async runtimeFor(id) { return id ? library.loadRuntime(id) : null; },
+	    drawRuntime,
+	    drawActive(ctx, semantic, direction, now, x, y, scale = 1) { drawRuntime(active, ctx, semantic, direction, now, x, y, scale); },
+	    stop() { if (raf) cancelAnimationFrame(raf); raf = 0; if (base) base.style.opacity = ""; overlay?.remove(); overlay = null; },
+	  };
+	}
+
+	const HOME_KEY = "home.state.v3";
+	const TW = 88, TH = 44, FURNITURE = ["chair", "table", "bed", "sofa", "lamp", "plant", "door"];
+	const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+	const key = (x, y) => `${x},${y}`;
+	function defaultState() {
+	  const floors = {}; for (let y = 0; y < 6; y++) for (let x = 0; x < 8; x++) floors[key(x,y)] = "wood";
+	  return { width:8,height:6,floors,walls:{},furniture:[
+	    {id:"bed",type:"bed",x:1.5,y:1.3},{id:"table",type:"table",x:4.2,y:2.5},{id:"chair",type:"chair",x:5.1,y:2.5},{id:"sofa",type:"sofa",x:2.4,y:4.2},{id:"plant",type:"plant",x:6.7,y:1.2},{id:"door",type:"door",x:7.4,y:3}
+	  ],human:{x:3.3,y:3.4},buddy:{x:4.3,y:3.3},mode:"play",buildMode:"none",floorBrush:"wood",furnitureBrush:"chair"};
+	}
+	function clean(raw) {
+	  const d=defaultState(), s=raw&&typeof raw==="object"?raw:{}; const width=clamp(Number.isInteger(s.width)?s.width:d.width,3,16),height=clamp(Number.isInteger(s.height)?s.height:d.height,3,12);
+	  return {width,height,floors:s.floors&&typeof s.floors==="object"?{...s.floors}:d.floors,walls:s.walls&&typeof s.walls==="object"?{...s.walls}:{},
+	    furniture:Array.isArray(s.furniture)?s.furniture.filter(i=>i&&FURNITURE.includes(i.type)).slice(0,120).map((i,n)=>({id:String(i.id||`${i.type}-${n}`),type:i.type,x:clamp(Number(i.x)||1,.5,width-.5),y:clamp(Number(i.y)||1,.5,height-.5)})):d.furniture,
+	    human:{x:clamp(Number(s.human?.x)||d.human.x,.2,width-.2),y:clamp(Number(s.human?.y)||d.human.y,.2,height-.2)},buddy:{x:clamp(Number(s.buddy?.x)||d.buddy.x,.2,width-.2),y:clamp(Number(s.buddy?.y)||d.buddy.y,.2,height-.2)},
+	    mode:s.mode==="idle"?"idle":"play",buildMode:["none","floor","erase","wall","furniture","remove"].includes(s.buildMode)?s.buildMode:"none",floorBrush:["wood","stone","grass","water"].includes(s.floorBrush)?s.floorBrush:"wood",furnitureBrush:FURNITURE.includes(s.furnitureBrush)?s.furnitureBrush:"chair"};
+	}
+	const iso=(o,x,y)=>({x:o.x+(x-y)*TW/2,y:o.y+(x+y)*TH/2});
+	const inverse=(o,x,y)=>({x:((x-o.x)/(TW/2)+(y-o.y)/(TH/2))/2,y:((y-o.y)/(TH/2)-(x-o.x)/(TW/2))/2});
+	const direction=(dx,dy,f="south")=>Math.hypot(dx,dy)<.01?f:["east","south-east","south","south-west","west","north-west","north","north-east"][(Math.round(Math.atan2(dy,dx)/(Math.PI/4))+8)%8];
+	function diamond(c,p,fill){c.beginPath();c.moveTo(p.x,p.y);c.lineTo(p.x+TW/2,p.y+TH/2);c.lineTo(p.x,p.y+TH);c.lineTo(p.x-TW/2,p.y+TH/2);c.closePath();c.fillStyle=fill;c.fill();c.strokeStyle="#6e5c52";c.stroke();}
+	function furniture(c,item,p){c.save();c.translate(p.x,p.y+22);c.strokeStyle="#3b3045";c.lineWidth=2;const box=(x,y,w,h,color)=>{c.fillStyle=color;c.fillRect(x,y,w,h);c.strokeRect(x,y,w,h);};
+	  if(item.type==="bed"){box(-38,-16,76,34,"#754d3f");box(-31,-22,62,24,"#b9a5df");}else if(item.type==="table"){box(-27,-20,54,27,"#9a6c49");box(-22,7,7,20,"#9a6c49");box(15,7,7,20,"#9a6c49");}else if(item.type==="chair"){box(-14,-25,28,29,"#8a6045");box(-14,-41,28,16,"#8a6045");}else if(item.type==="sofa"){box(-36,-25,72,34,"#b66f6f");box(-30,-39,60,17,"#c98484");}else if(item.type==="lamp"){box(-3,-42,6,42,"#5b4b45");c.fillStyle="#f0ce6b";c.beginPath();c.moveTo(-14,-46);c.lineTo(14,-46);c.lineTo(9,-61);c.lineTo(-9,-61);c.closePath();c.fill();c.stroke();}else if(item.type==="plant"){box(-12,-9,24,22,"#825e46");c.fillStyle="#5f9d5e";c.fillRect(-5,-41,10,32);c.fillRect(-20,-32,16,9);c.fillRect(4,-27,18,9);}else box(-11,-65,22,65,"#704934");c.restore();}
+	function fallbackHuman(c,p){c.save();c.translate(p.x,p.y+18);const r=(x,y,w,h,col)=>{c.fillStyle=col;c.fillRect(x*4,y*4,w*4,h*4);};r(-2,-13,4,4,"#d6a67d");r(-3,-9,6,5,"#29272d");r(-3,-4,2,5,"#4d6a88");r(1,-4,2,5,"#4d6a88");r(-4,-12,6,2,"#4b2f29");c.restore();}
+	function nearest(s,type,from){return s.furniture.filter(i=>!type||i.type===type).sort((a,b)=>Math.hypot(a.x-from.x,a.y-from.y)-Math.hypot(b.x-from.x,b.y-from.y))[0]||null;}
+	function createHome({storage,brain,petRuntime,petLibrary,shadowRoot,onClose=()=>{}}){
+	  let s=defaultState(),root=null,canvas=null,c=null,buildbar=null,raf=0,last=performance.now(),keys=new Set(),humanRuntime=null,hdir="south",bdir="south",hgoal=null,bgoal=null,lastPlan=0,lastCare=0,drag=null;
+	  const save=()=>void storage.setJson(HOME_KEY,s); const origin=()=>({x:canvas.width/2,y:70});
+	  async function load(){s=clean(await storage.getJson(HOME_KEY,null));const id=await petLibrary.homeHumanId();humanRuntime=id?await petRuntime.runtimeFor(id):null;}
+	  function style(){const e=document.createElement("style");e.id="pb-home-style";e.textContent=`.pb-home{position:fixed;inset:8px;z-index:2147483645;background:#91b59b;border:3px solid #3b3045;box-shadow:6px 6px 0 #3b3045;display:flex;flex-direction:column;font-family:Monocraft,monospace;color:#2d2634;pointer-events:auto}.pb-homebar,.pb-buildbar{display:flex;gap:5px;align-items:center;flex-wrap:wrap;background:#ffecda;border-bottom:2px solid #3b3045;padding:5px}.pb-home button,.pb-home select{font:inherit;font-size:11px;border:2px solid #3b3045;background:#fff8e9;padding:5px 7px;color:#2d2634}.pb-home button.active{background:#ffa3cb}.pb-stage{position:relative;flex:1;min-height:0}.pb-stage canvas{width:100%;height:100%;image-rendering:pixelated;touch-action:none}.pb-status{position:absolute;left:8px;bottom:8px;background:#ffecda;border:2px solid #3b3045;padding:5px;font-size:10px;max-width:76%}.pb-dpad{position:absolute;right:10px;bottom:10px;display:grid;grid-template-columns:40px 40px 40px;grid-template-rows:40px 40px;gap:3px}.pb-dpad .u{grid-column:2}.pb-dpad .l{grid-column:1;grid-row:2}.pb-dpad .d{grid-column:2;grid-row:2}.pb-dpad .r{grid-column:3;grid-row:2}@media(min-width:700px){.pb-dpad{display:none}}`;shadowRoot.appendChild(e);}
+	  const btn=(t,fn)=>{const b=document.createElement("button");b.textContent=t;b.onclick=fn;return b};
+	  function ui(){if(!root)return;root.querySelectorAll("[data-mode]").forEach(e=>e.classList.toggle("active",e.dataset.mode===s.mode));root.querySelectorAll("[data-build]").forEach(e=>e.classList.toggle("active",e.dataset.build===s.buildMode));buildbar.style.display=s.buildMode==="none"?"none":"flex";}
+	  async function open(){if(root)return;await load();style();root=document.createElement("div");root.className="pb-home";const bar=document.createElement("div");bar.className="pb-homebar";const title=document.createElement("strong");title.textContent=`${brain.snapshot().displayName}'s Home`;const play=btn("Play",()=>{s.mode="play";save();ui();});play.dataset.mode="play";const idle=btn("Idle",()=>{s.mode="idle";keys.clear();save();ui();});idle.dataset.mode="idle";bar.append(title,play,idle,btn("Build",()=>{s.buildMode=s.buildMode==="none"?"floor":"none";save();ui();}),btn("Pet",()=>brain.care("pet")),btn("Feed",()=>brain.care("feed")));const spacer=document.createElement("span");spacer.style.flex="1";bar.append(spacer,btn("Leave Home",close));
+	    buildbar=document.createElement("div");buildbar.className="pb-buildbar";for(const [m,l] of [["floor","Floor"],["erase","Erase"],["wall","Wall"],["furniture","Furniture"],["remove","Remove"]]){const b=btn(l,()=>{s.buildMode=m;save();ui();});b.dataset.build=m;buildbar.append(b);}const fs=document.createElement("select");for(const x of ["wood","stone","grass","water"]){const o=document.createElement("option");o.value=o.textContent=x;fs.append(o);}fs.value=s.floorBrush;fs.onchange=()=>{s.floorBrush=fs.value;save();};const fur=document.createElement("select");for(const x of FURNITURE){const o=document.createElement("option");o.value=o.textContent=x;fur.append(o);}fur.value=s.furnitureBrush;fur.onchange=()=>{s.furnitureBrush=fur.value;save();};buildbar.append(fs,fur,btn("Reset",()=>{if(confirm("Reset this Home layout?")){s=defaultState();save();ui();}}));
+	    const stage=document.createElement("div");stage.className="pb-stage";canvas=document.createElement("canvas");canvas.width=1050;canvas.height=680;c=canvas.getContext("2d");c.imageSmoothingEnabled=false;const status=document.createElement("div");status.className="pb-status";status.id="pb-status";const pad=document.createElement("div");pad.className="pb-dpad";for(const [d,cl,t] of [["up","u","↑"],["left","l","←"],["down","d","↓"],["right","r","→"]]){const b=btn(t,()=>{});b.className=cl;const on=e=>{e.preventDefault();keys.add(d);},off=e=>{e.preventDefault();keys.delete(d);};b.onpointerdown=on;b.onpointerup=off;b.onpointercancel=off;b.onpointerleave=off;pad.append(b);}stage.append(canvas,status,pad);root.append(bar,buildbar,stage);shadowRoot.append(root);ui();window.addEventListener("keydown",keydown,true);window.addEventListener("keyup",keyup,true);canvas.onpointerdown=pdown;canvas.onpointermove=pmove;canvas.onpointerup=pup;last=performance.now();raf=requestAnimationFrame(loop);}
+	  function close(){if(!root)return;cancelAnimationFrame(raf);raf=0;window.removeEventListener("keydown",keydown,true);window.removeEventListener("keyup",keyup,true);shadowRoot.getElementById("pb-home-style")?.remove();root.remove();root=canvas=c=null;drag=null;save();onClose();}
+	  const mapping={w:"up",arrowup:"up",s:"down",arrowdown:"down",a:"left",arrowleft:"left",d:"right",arrowright:"right"};function keydown(e){if(!root||s.mode!=="play")return;const m=mapping[e.key.toLowerCase()];if(m){keys.add(m);e.preventDefault();e.stopPropagation();}}function keyup(e){const m=mapping[e.key.toLowerCase()];if(m)keys.delete(m);}
+	  function cell(e){const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*canvas.width/r.width,y=(e.clientY-r.top)*canvas.height/r.height,q=inverse(origin(),x,y-TH/2);return {x:Math.floor(q.x+.5),y:Math.floor(q.y+.5)}}
+	  function pdown(e){if(s.buildMode==="none")return;const q=cell(e);if(q.x<0||q.y<0||q.x>=s.width||q.y>=s.height)return;const t={x:q.x+.5,y:q.y+.5};if(s.buildMode==="floor")s.floors[key(q.x,q.y)]=s.floorBrush;else if(s.buildMode==="erase")delete s.floors[key(q.x,q.y)];else if(s.buildMode==="wall")s.walls[key(q.x,q.y)]=!s.walls[key(q.x,q.y)];else if(s.buildMode==="remove"){const i=nearest(s,null,t);if(i&&Math.hypot(i.x-t.x,i.y-t.y)<1.2)s.furniture=s.furniture.filter(x=>x.id!==i.id);}else {const i=nearest(s,null,t);if(i&&Math.hypot(i.x-t.x,i.y-t.y)<.8){drag=i;canvas.setPointerCapture?.(e.pointerId);}else s.furniture.push({id:`${s.furnitureBrush}-${Date.now()}`,type:s.furnitureBrush,x:t.x,y:t.y});}save();}
+	  function pmove(e){if(!drag)return;const q=cell(e);drag.x=clamp(q.x+.5,.5,s.width-.5);drag.y=clamp(q.y+.5,.5,s.height-.5);}function pup(e){if(!drag)return;save();drag=null;if(canvas.hasPointerCapture?.(e.pointerId))canvas.releasePointerCapture(e.pointerId);}
+	  const floorAt=(x,y)=>Boolean(s.floors[key(Math.floor(x),Math.floor(y))]);function move(a,dx,dy,speed,dt){if(!dx&&!dy)return {dx:0,dy:0};const n=Math.hypot(dx,dy)||1,sx=dx/n*speed*dt,sy=dy/n*speed*dt,nx=clamp(a.x+sx,.15,s.width-.15),ny=clamp(a.y+sy,.15,s.height-.15);if(floorAt(nx,a.y))a.x=nx;if(floorAt(a.x,ny))a.y=ny;return {dx:sx,dy:sy}}
+	  async function plan(now){if(now-lastPlan<4500)return;lastPlan=now;const snap=brain.snapshot(),need=snap.dominantNeed;let t=need==="food"?nearest(s,"table",s.human):need==="sleep"?nearest(s,"bed",s.human):need==="play"?nearest(s,"sofa",s.human):null;t=t||{x:s.buddy.x+.7,y:s.buddy.y+.2};hgoal={x:t.x,y:t.y};bgoal=Math.random()<.7?{x:hgoal.x+(Math.random()-.5),y:hgoal.y+(Math.random()-.5)}:{x:.5+Math.random()*(s.width-1),y:.5+Math.random()*(s.height-1)};if(now-lastCare>30000){const l=snap.lifecycle;const a=l.hunger<58?"feed":l.energy<45?"nap":l.happiness<58?"play":l.affection<58?"pet":l.mess>=3?"clean":null;if(a){lastCare=now;setTimeout(()=>{if(root&&s.mode==="idle")void brain.care(a);},2000);}}}
+	  function update(dt,now){let hm={dx:0,dy:0},bm={dx:0,dy:0};if(s.mode==="play"){const dx=(keys.has("right")?1:0)-(keys.has("left")?1:0),dy=(keys.has("down")?1:0)-(keys.has("up")?1:0);hm=move(s.human,dx,dy,.0023,dt);const bx=s.human.x-s.buddy.x,by=s.human.y-s.buddy.y;if(Math.hypot(bx,by)>1.25)bm=move(s.buddy,bx,by,.00165,dt);}else {void plan(now);if(hgoal){const dx=hgoal.x-s.human.x,dy=hgoal.y-s.human.y;if(Math.hypot(dx,dy)>.18)hm=move(s.human,dx,dy,.00115,dt);}if(bgoal){const dx=bgoal.x-s.buddy.x,dy=bgoal.y-s.buddy.y;if(Math.hypot(dx,dy)>.18)bm=move(s.buddy,dx,dy,.00105,dt);}}if(Math.hypot(hm.dx,hm.dy)>.001)hdir=direction(hm.dx,hm.dy,hdir);if(Math.hypot(bm.dx,bm.dy)>.001)bdir=direction(bm.dx,bm.dy,bdir);}
+	  function wall(p,west=false){c.fillStyle="#d8bda8";c.strokeStyle="#4b3b45";c.beginPath();c.moveTo(p.x,p.y);c.lineTo(p.x+(west?-TW/2:TW/2),p.y+TH/2);c.lineTo(p.x+(west?-TW/2:TW/2),p.y-55+TH/2);c.lineTo(p.x,p.y-55);c.closePath();c.fill();c.stroke();}
+	  function draw(now){c.clearRect(0,0,canvas.width,canvas.height);c.fillStyle="#8eae95";c.fillRect(0,0,canvas.width,canvas.height);const o=origin(),colors={wood:"#d7b98a",stone:"#a7a2a1",grass:"#8dbb78",water:"#71a9cf"};for(let y=0;y<s.height;y++)for(let x=0;x<s.width;x++){const f=s.floors[key(x,y)];if(f)diamond(c,iso(o,x,y),colors[f]);}for(let x=0;x<s.width;x++)if(s.floors[key(x,0)])wall(iso(o,x,0));for(let y=0;y<s.height;y++)if(s.floors[key(0,y)])wall(iso(o,0,y),true);for(const k of Object.keys(s.walls))if(s.walls[k]){const [x,y]=k.split(",").map(Number);wall(iso(o,x,y),(x+y)%2===1);}
+	    const actors=s.furniture.map(item=>({kind:"f",z:item.x+item.y,item,p:iso(o,item.x,item.y)}));actors.push({kind:"h",z:s.human.x+s.human.y,p:iso(o,s.human.x,s.human.y)},{kind:"b",z:s.buddy.x+s.buddy.y,p:iso(o,s.buddy.x,s.buddy.y)});actors.sort((a,b)=>a.z-b.z);for(const a of actors){if(a.kind==="f")furniture(c,a.item,a.p);else if(a.kind==="h"){if(humanRuntime)petRuntime.drawRuntime(humanRuntime,c,keys.size||s.mode==="idle"?"running":"idle",hdir,now,a.p.x,a.p.y+27,.64);else fallbackHuman(c,a.p);}else {const pack=petRuntime.activePack();if(pack)petRuntime.drawActive(c,"idle",bdir,now,a.p.x,a.p.y+27,pack.frameHeight>100?.48:.72);else {const legacy=shadowRoot.getElementById("birb");if(legacy)c.drawImage(legacy,a.p.x-22,a.p.y-20,44,44);}}}const snap=brain.snapshot(),status=root.querySelector("#pb-status");if(status)status.textContent=`${s.mode.toUpperCase()} • ${snap.displayName}: ${snap.mood} • food ${Math.round(snap.lifecycle.hunger)} • energy ${Math.round(snap.lifecycle.energy)} • fun ${Math.round(snap.lifecycle.happiness)} • bond ${Math.round(snap.lifecycle.affection)}${humanRuntime?"":" • Import Ani_Iso_Human.zip in Field Guide for your exact human"}`;}
+	  function loop(now){if(!root)return;const dt=Math.min(50,now-last);last=now;update(dt,now);draw(now);raf=requestAnimationFrame(loop);}
+	  return {open,close,isOpen:()=>!!root,async reloadHuman(){const id=await petLibrary.homeHumanId();humanRuntime=id?await petRuntime.runtimeFor(id):null;}};
+	}
+
+	let catalogCache = null;
+	async function openPetsCatalog() {
+	  if (catalogCache) return catalogCache;
+	  try {
+	    const first = await fetch("https://openpets.dev/pets/catalog.v3.json", { credentials:"omit", cache:"force-cache" });
+	    if (!first.ok) throw new Error(`catalog ${first.status}`);
+	    const index = await first.json(), all = [];
+	    const add = e => { if(e&&typeof e.id==="string"&&typeof e.displayName==="string"&&!all.some(x=>x.id===e.id)) all.push(e); };
+	    (Array.isArray(index?.pets)?index.pets:Array.isArray(index?.items)?index.items:[]).forEach(add);
+	    for (const page of Array.isArray(index?.pages)?index.pages:[]) {
+	      const url = typeof page==="string" ? new URL(page, "https://openpets.dev/pets/").href : typeof page?.url==="string" ? new URL(page.url, "https://openpets.dev/pets/").href : null;
+	      if (!url) continue; const r=await fetch(url,{credentials:"omit",cache:"force-cache"}); if(!r.ok) continue; const data=await r.json(); (Array.isArray(data)?data:Array.isArray(data?.pets)?data.pets:Array.isArray(data?.items)?data.items:[]).forEach(add);
+	    }
+	    catalogCache=all; return all;
+	  } catch (error) { console.warn("Pocket Buddy: OpenPets catalog unavailable on this host", error); return []; }
+	}
+	const waitRoot=()=>new Promise((resolve,reject)=>{let n=0;const timer=setInterval(()=>{const host=document.getElementById("birb-shadow-host");if(host?.shadowRoot){clearInterval(timer);resolve(host.shadowRoot);}else if(++n>240){clearInterval(timer);reject(new Error("Pocket Bird runtime did not create its shadow root."));}},50);});
+	const btn=(label,fn,cls="")=>{const b=document.createElement("button");b.textContent=label;b.className=cls;b.onclick=fn;return b};
+	function closeBaseMenu(root){root.getElementById("birb-menu")?.remove();root.getElementById("birb-menu-exit")?.remove();}
+	function windowBox(root,id,title){root.getElementById(id)?.remove();const w=document.createElement("div");w.id=id;w.className="birb-window pb-window";const h=document.createElement("div");h.className="birb-window-header";const t=document.createElement("div");t.className="birb-window-title";t.textContent=title;const x=document.createElement("div");x.className="birb-window-close";x.textContent="x";x.onclick=()=>w.remove();h.append(t,x);const c=document.createElement("div");c.className="birb-window-content pb-content";w.append(h,c);root.append(w);w.style.left=`${Math.max(8,innerWidth/2-w.offsetWidth/2)}px`;w.style.top=`${Math.max(8,innerHeight/2-w.offsetHeight/2)}px`;return {w,c}}
+	function toast(root,text){const e=document.createElement("div");e.className="pb-toast";e.textContent=text;root.append(e);setTimeout(()=>e.remove(),2200);}
+	function styles(root){if(root.getElementById("pb-layer-style"))return;const s=document.createElement("style");s.id="pb-layer-style";s.textContent=`.pb-window{width:min(420px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px))}.pb-content{padding:8px;gap:7px;overflow:auto;align-items:stretch}.pb-menu-item{width:calc(100% - 4px)}.pb-row{display:flex;gap:6px;flex-wrap:wrap}.pb-row button,.pb-content button,.pb-content input{font:inherit;border:2px solid var(--birb-border-color);background:#fff8e9;padding:5px;color:#222}.pb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;width:100%}.pb-card{border:2px solid #ffcf90;background:rgba(255,221,177,.5);padding:6px;min-height:75px;cursor:pointer}.pb-card.locked{opacity:.55;filter:grayscale(1)}.pb-small{font-size:10px;opacity:.72}.pb-bar{height:8px;border:1px solid #765f51;background:#ead8be}.pb-bar>i{display:block;height:100%;background:var(--birb-highlight)}.pb-chat{height:220px;overflow:auto;border:2px solid #ffcf90;background:#fff8e9;padding:6px}.pb-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:2147483647;background:#ffecda;border:2px solid #3b3045;padding:6px;box-shadow:4px 4px 0 #3b3045;font:12px Monocraft,monospace}`;root.append(s);}
+	function importButton(root,library,after){const input=document.createElement("input");input.type="file";input.accept=".zip,application/zip";input.hidden=true;input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{const pack=await library.importFile(file);toast(root,`${pack.displayName} imported`);await after(pack);}catch(e){toast(root,e?.message||"Import failed");}finally{input.value="";}};root.append(input);return btn("Import pet ZIP",()=>input.click())}
+	function menuItem(label,fn){const e=document.createElement("div");e.className="birb-menu-item pb-menu-item";e.textContent=label;e.onclick=()=>{fn();};return e}
+	async function initializeBuddyLayer(){
+	  if(window.PocketBuddy?.coreVersion)return window.PocketBuddy; const root=await waitRoot();styles(root);const storage=createBuddyStorage();const library=createPetLibrary(storage);let runtime;
+	  const brain=createBuddyBrain(storage,{onReaction:r=>runtime?.react(r)});await brain.load();runtime=createPetRuntime(library,root);await runtime.start();
+	  const home=createHome({storage,brain,petRuntime:runtime,petLibrary:library,shadowRoot:root});
+	  async function care(action){const result=await brain.care(action);if(action==="feed")runtime.react("eating",1400);toast(root,result.message);return result}
+	  function showCare(){closeBaseMenu(root);const {c}=windowBox(root,"pb-care","Care");const snap=brain.snapshot();for(const [k,label] of [["hunger","Food"],["energy","Energy"],["happiness","Fun"],["affection","Bond"],["health","Health"]]){const row=document.createElement("div");row.textContent=`${label} ${Math.round(snap.lifecycle[k])}`;const bar=document.createElement("div");bar.className="pb-bar";bar.innerHTML=`<i style="width:${Math.round(snap.lifecycle[k])}%"></i>`;c.append(row,bar);}const r=document.createElement("div");r.className="pb-row";for(const [a,l] of [["feed","Feed"],["play","Play"],["pet","Pet"],["nap","Nap"],["clean","Clean"],["medicine","Medicine"]])r.append(btn(l,()=>care(a).then(showCare)));c.append(r);}
+	  function showBrain(){closeBaseMenu(root);const {c}=windowBox(root,"pb-brain","Buddy Brain");const s=brain.snapshot();c.innerHTML=`<b>${s.displayName}</b><div class="pb-small">${s.stage} • level ${s.level} • ${s.mood}</div><div>Personality and relationship memory belong to this Buddy across Pocket Buddy surfaces.</div><div class="pb-small">Trust ${Math.round(s.brain.relationship.trust*100)} • Familiarity ${Math.round(s.brain.relationship.familiarity*100)} • Notes ${s.brain.notes.length}</div>`;const name=document.createElement("input");name.value=s.displayName;name.maxLength=64;const note=document.createElement("input");note.placeholder="Remember a note…";c.append(name,btn("Rename",()=>brain.rename(name.value).then(()=>toast(root,"Buddy renamed"))),note,btn("Remember",()=>brain.addNote(note.value).then(()=>{note.value="";toast(root,"Remembered"); })));}
+	  function showTalk(){closeBaseMenu(root);const {c}=windowBox(root,"pb-talk",`Talk to ${brain.snapshot().displayName}`);const log=document.createElement("div");log.className="pb-chat";for(const m of brain.snapshot().brain.messages.slice(-20)){const d=document.createElement("div");d.textContent=`${m.role==="user"?"You":"Buddy"}: ${m.text}`;log.append(d);}const row=document.createElement("div");row.className="pb-row";const input=document.createElement("input");input.placeholder="Say something…";input.style.flex="1";const send=btn("Send",async()=>{const text=input.value.trim();if(!text)return;input.value="";await brain.talk(text);showTalk();});input.onkeydown=e=>{if(e.key==="Enter")send.click();};row.append(input,send);c.append(log,row);setTimeout(()=>input.focus(),0);}
+	  async function selectPet(id){await library.setActive(id);await runtime.select(id);toast(root,id==="pocket-bird"?"Pocket Bird active":"Buddy active");}
+	  async function showPets(){closeBaseMenu(root);const {c}=windowBox(root,"pb-pets","Buddies & Field Guide");const intro=document.createElement("div");intro.className="pb-small";intro.textContent="Pocket Bird collection stays intact. Add Prismtek PixelLab or any OpenPets package here; private art stays local.";c.append(intro);const grid=document.createElement("div");grid.className="pb-grid";const active=await library.activeId(),installed=await library.listInstalled();
+	    const card=(name,desc,fn,locked=false)=>{const e=document.createElement("div");e.className=`pb-card${locked?" locked":""}`;e.innerHTML=`<b>${name}</b><div class="pb-small">${desc}</div>`;if(fn)e.onclick=fn;grid.append(e);};card("Pocket Bird","Original birds, hats, feathers and motion.",()=>selectPet("pocket-bird"));for(const recipe of PRISMTEK_PACK_RECIPES.filter(r=>r.kind==="buddy")){const pack=installed.find(x=>x.id===recipe.id);card(recipe.displayName,pack?`${pack.source} • ${pack.id===active?"ACTIVE":"tap to use"}`:`Import ${recipe.archiveName}`,pack?()=>selectPet(pack.id):null,!pack);}for(const pack of installed.filter(x=>x.kind!=="human"&&!PRISMTEK_PACK_RECIPES.some(r=>r.id===x.id)))card(pack.displayName,`${pack.source}${pack.id===active?" • ACTIVE":""}`,()=>selectPet(pack.id));c.append(grid,importButton(root,library,async pack=>{if(pack.kind==="human"){await library.setHomeHuman(pack.id);await home.reloadHuman();}else {await selectPet(pack.id);}showPets();}));
+	    const human=installed.find(x=>x.kind==="human");c.append(Object.assign(document.createElement("div"),{textContent:human?`Home player: ${human.displayName}`:"Home player: import Ani_Iso_Human.zip for your exact human"}));
+	    c.append(btn("Browse OpenPets Gallery",showGallery),btn("Open OpenPets website",()=>window.open(OPENPETS_GALLERY_URL,"_blank","noopener")));
+	  }
+	  async function installCatalogPet(entry){if(typeof entry.zip!=="string"&&!entry.downloadUrl) return toast(root,"This catalog entry has no package URL");const url=entry.zip||entry.downloadUrl;try{const r=await fetch(url,{credentials:"omit"});if(!r.ok)throw new Error(`download ${r.status}`);const blob=await r.blob();const file=new File([blob],`${entry.id}.zip`,{type:"application/zip"});const pack=await library.importFile(file);await selectPet(pack.id);toast(root,`${pack.displayName} installed`);}catch(e){toast(root,"Host blocked direct install; download the ZIP and use Import pet ZIP");}}
+	  async function showGallery(){closeBaseMenu(root);const {c}=windowBox(root,"pb-gallery","OpenPets Gallery");c.append(Object.assign(document.createElement("div"),{className:"pb-small",textContent:"Loading the current OpenPets catalog…"}));const pets=await openPetsCatalog();c.innerHTML="";if(!pets.length){c.append(Object.assign(document.createElement("div"),{textContent:"This page blocks the OpenPets catalog. You can still import any OpenPets ZIP locally."}),importButton(root,library,async p=>{await selectPet(p.id);showGallery();}));return}const search=document.createElement("input");search.placeholder=`Search ${pets.length} OpenPets pets…`;const grid=document.createElement("div");grid.className="pb-grid";const render=()=>{grid.innerHTML="";const q=search.value.trim().toLowerCase();for(const p of pets.filter(x=>!q||`${x.displayName} ${x.description||""} ${x.id}`.toLowerCase().includes(q)).slice(0,80)){const e=document.createElement("div");e.className="pb-card";e.innerHTML=`<b>${p.displayName}</b><div class="pb-small">${p.description||p.id}</div>`;e.onclick=()=>installCatalogPet(p);grid.append(e);}};search.oninput=render;c.append(search,grid);render();}
+	  function augmentMenu(menu){
+	    if(menu.dataset.pocketBuddy)return; menu.dataset.pocketBuddy="1";
+	    const content=menu.querySelector(".birb-window-content"); if(!content)return;
+	    const first=content.querySelector(".birb-menu-item");
+	    if(first&&!first.dataset.pocketBuddyCare){
+	      first.dataset.pocketBuddyCare="1";
+	      first.addEventListener("click",()=>{void brain.care("pet").then(result=>toast(root,result.message));});
+	    }
+	    const items=[
+	      menuItem("Talk",()=>{closeBaseMenu(root);showTalk();}),
+	      menuItem("Home",()=>{closeBaseMenu(root);home.open();}),
+	      menuItem("Care",()=>{closeBaseMenu(root);showCare();}),
+	      menuItem("Buddy Brain",()=>{closeBaseMenu(root);showBrain();}),
+	      menuItem("Buddies",()=>{closeBaseMenu(root);showPets();}),
+	    ];
+	    let cursor=first;
+	    for(const item of items){ if(cursor){cursor.after(item);cursor=item;}else content.append(item); }
+	  }
+	  function augmentFieldGuide(guide){
+	    if(guide.dataset.pocketBuddy)return; guide.dataset.pocketBuddy="1";
+	    const content=guide.querySelector(".birb-window-content"); if(!content)return;
+	    const section=document.createElement("div"); section.className="pb-guide-bridge";
+	    const label=document.createElement("div"); label.className="birb-field-guide-section-label"; label.textContent="----- Buddies -----";
+	    const note=document.createElement("div"); note.className="birb-field-guide-description"; note.textContent="Pocket Bird species live above. Prismtek Buddies and OpenPets packs live in the same Pocket Buddy Field Guide.";
+	    const open=btn("Open Buddies & OpenPets",()=>showPets()); open.style.margin="6px 10px 10px";
+	    section.append(label,note,open); content.append(section);
+	  }
+	  const observer=new MutationObserver(()=>{
+	    const menu=root.getElementById("birb-menu"); if(menu)augmentMenu(menu);
+	    const guide=root.getElementById("birb-field-guide"); if(guide)augmentFieldGuide(guide);
+	  }); observer.observe(root,{childList:true,subtree:true});
+	  setInterval(()=>void brain.tick(),60_000);
+	  window.PocketBuddy={coreVersion:"2026.08.07",brain,library,runtime,home,showPets,showTalk,showCare,showBrain,care,openPetsCatalog};window.dispatchEvent(new CustomEvent("pocket-buddy-core-ready",{detail:{version:window.PocketBuddy.coreVersion}}));return window.PocketBuddy;
+	}
+
 	initializeApplication(new UserScriptContext());
+	initializeBuddyLayer().catch((error) => console.error("Pocket Buddy core failed to start", error));
 
 })();
