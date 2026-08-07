@@ -3,8 +3,10 @@ import { createBuddyBrain } from "./brain.js";
 import { createPetLibrary } from "./pet-importer.js";
 import { createPetRuntime } from "./pet-runtime.js";
 import { createHome } from "./home.js";
+import { createThemeController } from "./theme.js";
 import { OPENPETS_GALLERY_URL } from "./pet-recipes.js";
 
+const POCKET_BUDDY_VERSION = "__POCKET_BUDDY_VERSION__";
 const OPENPETS_CATALOG_V3 = "https://openpets.dev/pets/catalog.v3.json";
 const OPENPETS_BASE = "https://openpets.dev/pets/";
 const OPENPETS_VISIBLE_STEP = 80;
@@ -142,28 +144,32 @@ function styles(root) {
   style.textContent = `
     .pb-window{width:min(420px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px))}
     .pb-content{padding:8px;gap:7px;overflow:auto;align-items:stretch}
+    .pb-menu-item{width:calc(100% - 4px)}
     .pb-row{display:flex;gap:6px;flex-wrap:wrap}
-    .pb-row button,.pb-content button,.pb-content input{font:inherit;border:2px solid var(--birb-border-color);background:#fff8e9;padding:5px;color:#222}
+    .pb-row button,.pb-content button,.pb-content input{font:inherit;border:2px solid var(--birb-border-color);background:var(--birb-background-color);padding:5px;color:#222}
     .pb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;width:100%}
-    .pb-card{position:relative;border:2px solid #ffcf90;background:rgba(255,221,177,.5);padding:6px;min-height:75px;cursor:pointer;box-sizing:border-box}
-    .pb-card:hover,.pb-card.active{border-color:var(--birb-highlight);background:#fff8e9}
+    .pb-card{position:relative;border:2px solid var(--birb-highlight);background:color-mix(in srgb,var(--birb-highlight) 18%,var(--birb-background-color));padding:6px;min-height:75px;cursor:pointer;box-sizing:border-box}
+    .pb-card:hover,.pb-card.active{outline:2px solid var(--birb-border-color);outline-offset:1px}
     .pb-card.locked{opacity:.55;filter:grayscale(1);cursor:default}
+    .pb-card.selected{outline:2px solid var(--birb-border-color);outline-offset:1px}
     .pb-small{font-size:10px;opacity:.72}
-    .pb-bar{height:8px;border:1px solid #765f51;background:#ead8be}
+    .pb-bar{height:8px;border:1px solid var(--birb-border-color);background:color-mix(in srgb,var(--birb-background-color) 75%,#777)}
     .pb-bar>i{display:block;height:100%;background:var(--birb-highlight)}
-    .pb-chat{height:220px;overflow:auto;border:2px solid #ffcf90;background:#fff8e9;padding:6px}
-    .pb-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:2147483647;background:#ffecda;border:2px solid #3b3045;padding:6px;box-shadow:4px 4px 0 #3b3045;font:12px Monocraft,monospace}
+    .pb-chat{height:220px;overflow:auto;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:6px}
+    .pb-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:2147483647;background:var(--birb-background-color);border:2px solid var(--birb-border-color);padding:6px;box-shadow:4px 4px 0 var(--birb-border-color);font:12px Monocraft,monospace}
     .pb-guide-tabs{display:flex;gap:4px;padding:6px 8px;position:sticky;top:0;z-index:3;background:var(--birb-background-color)}
-    .pb-guide-tabs button{flex:1;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:#fff8e9;padding:5px 3px;color:#222;cursor:pointer}
+    .pb-guide-tabs button{flex:1;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px 3px;color:#222;cursor:pointer}
     .pb-guide-tabs button.active{background:var(--birb-highlight);color:#fff}
     .pb-guide-panel{width:100%;box-sizing:border-box}
     .pb-guide-panel[hidden]{display:none!important}
     .pb-guide-tools{display:flex;gap:6px;padding:7px 9px;flex-wrap:wrap}
-    .pb-guide-tools input{min-width:0;flex:1 1 190px;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:#fff8e9;padding:5px;color:#222}
-    .pb-guide-tools button{font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:#fff8e9;padding:5px;color:#222;cursor:pointer}
+    .pb-guide-tools input{min-width:0;flex:1 1 190px;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px;color:#222}
+    .pb-guide-tools button{font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px;color:#222;cursor:pointer}
     .pb-guide-status{padding:2px 9px 6px;font:9px Monocraft,monospace;opacity:.68}
     .pb-guide-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px;padding:4px 9px 12px}
     .pb-menu-separator{height:2px;margin:3px 6px;background:var(--birb-highlight);opacity:.45}
+    .pb-theme-swatch{height:24px;border:1px solid var(--birb-border-color);margin-bottom:5px;display:flex;overflow:hidden}
+    .pb-theme-swatch>i{display:block;flex:1}
     #birb-field-guide.pb-field-guide{width:min(650px,94vw)}
   `;
   root.append(style);
@@ -193,7 +199,7 @@ function importButton(root, library, after) {
 
 function menuItem(label, action) {
   const element = document.createElement("div");
-  element.className = "birb-menu-item";
+  element.className = "birb-menu-item pb-menu-item";
   element.textContent = label;
   element.onclick = action;
   return element;
@@ -203,6 +209,12 @@ function menuSeparator() {
   const element = document.createElement("div");
   element.className = "birb-window-separator pb-menu-separator";
   return element;
+}
+
+function isSettingsMenu(menu) {
+  if (menu.dataset.pocketBuddySubmenu) return false;
+  const first = menu.querySelector(".birb-window-content > .birb-menu-item");
+  return first?.textContent?.trim() === "Go Back";
 }
 
 function card(name, description, action, { active = false, locked = false } = {}) {
@@ -231,6 +243,8 @@ export async function initializeBuddyLayer() {
   runtime = createPetRuntime(library, root);
   await runtime.start();
   const home = createHome({ storage, brain, petRuntime: runtime, petLibrary: library, shadowRoot: root });
+  const themes = createThemeController({ storage, root, library });
+  await themes.start();
 
   async function care(action) {
     const result = await brain.care(action);
@@ -323,10 +337,44 @@ export async function initializeBuddyLayer() {
     setTimeout(() => input.focus(), 0);
   }
 
+  function showThemes() {
+    closeBaseMenu(root);
+    const { c } = windowBox(root, "pb-themes", "UI Theme");
+    const intro = document.createElement("div");
+    intro.className = "pb-small";
+    intro.textContent = "Auto keeps the classic Pocket Bird behavior: the UI follows your selected bird or Buddy. Pick a theme here to override it everywhere.";
+    const grid = document.createElement("div");
+    grid.className = "pb-grid";
+    const selected = themes.snapshot().id;
+    for (const theme of themes.themes()) {
+      const themeCard = document.createElement("div");
+      themeCard.className = `pb-card${selected === theme.id ? " selected" : ""}`;
+      if (theme.id === "auto") {
+        themeCard.innerHTML = `<b>${theme.label}</b><div class="pb-small">${theme.description}</div>`;
+      } else {
+        const swatch = document.createElement("div");
+        swatch.className = "pb-theme-swatch";
+        swatch.innerHTML = `<i style="background:${theme.accent}"></i><i style="background:${theme.background}"></i>`;
+        const label = document.createElement("b");
+        label.textContent = theme.label;
+        themeCard.append(swatch, label);
+      }
+      themeCard.onclick = async () => {
+        await themes.set(theme.id);
+        toast(root, theme.id === "auto" ? "Theme follows Buddy" : `${theme.label} theme active`);
+        showThemes();
+      };
+      grid.append(themeCard);
+    }
+    c.append(intro, grid);
+  }
+
   async function selectPet(id) {
     await library.setActive(id);
     await runtime.select(id);
-    toast(root, id === "pocket-bird" ? "Pocket Buddy pet active" : "Buddy pet active");
+    const pack = id === "pocket-bird" ? null : (await library.listInstalled()).find((item) => item.id === id) ?? null;
+    await themes.setActiveBuddy(id, pack);
+    toast(root, id === "pocket-bird" ? "Pocket Buddy pet active" : `${pack?.displayName ?? "Buddy"} active`);
   }
 
   async function installCatalogPet(entry, refresh) {
@@ -514,18 +562,22 @@ export async function initializeBuddyLayer() {
   function showBuddySubmenu(menu, rootNodes) {
     const content = menu.querySelector(".birb-window-content");
     if (!content) return;
-    const goBack = menuItem("Go Back", () => content.replaceChildren(...rootNodes));
+    menu.dataset.pocketBuddySubmenu = "1";
+    const goBack = menuItem("Go Back", () => {
+      delete menu.dataset.pocketBuddySubmenu;
+      content.replaceChildren(...rootNodes);
+    });
     const status = menuItem("Status", () => showStatus());
     const talk = menuItem("Talk", () => showTalk());
     const careItem = menuItem("Care", () => showCare());
     content.replaceChildren(goBack, menuSeparator(), status, talk, careItem);
   }
 
-  function augmentMenu(menu) {
-    if (menu.dataset.pocketBuddy) return;
+  function augmentMainMenu(menu) {
+    if (menu.dataset.pocketBuddyMain) return;
     const content = menu.querySelector(".birb-window-content");
     if (!content) return;
-    menu.dataset.pocketBuddy = "1";
+    menu.dataset.pocketBuddyMain = "1";
 
     const originalItems = [...content.querySelectorAll(":scope > .birb-menu-item")];
     const first = originalItems[0];
@@ -552,9 +604,28 @@ export async function initializeBuddyLayer() {
     buddyItem.onclick = () => showBuddySubmenu(menu, rootNodes);
   }
 
+  function augmentSettingsMenu(menu) {
+    if (menu.dataset.pocketBuddySettings) return;
+    menu.dataset.pocketBuddySettings = "1";
+    const content = menu.querySelector(".birb-window-content");
+    if (!content) return;
+    const item = menuItem("", () => {});
+    item.textContent = `UI Theme: ${themes.snapshot().label}`;
+    item.onclick = () => {
+      closeBaseMenu(root);
+      showThemes();
+    };
+    const firstSeparator = content.querySelector(".birb-window-separator");
+    if (firstSeparator) firstSeparator.after(item);
+    else content.append(item);
+  }
+
   const observer = new MutationObserver(() => {
     const menu = root.getElementById("birb-menu");
-    if (menu) augmentMenu(menu);
+    if (menu && !menu.dataset.pocketBuddySubmenu) {
+      if (isSettingsMenu(menu)) augmentSettingsMenu(menu);
+      else augmentMainMenu(menu);
+    }
     const guide = root.getElementById("birb-field-guide");
     if (guide) augmentFieldGuide(guide);
   });
@@ -563,14 +634,16 @@ export async function initializeBuddyLayer() {
   setInterval(() => void brain.tick(), 60_000);
 
   window.PocketBuddy = {
-    coreVersion: "2026.08.07",
+    coreVersion: POCKET_BUDDY_VERSION,
     brain,
     library,
     runtime,
     home,
+    themes,
     showTalk,
     showCare,
     showStatus,
+    showThemes,
     care,
     openPetsCatalog,
   };
