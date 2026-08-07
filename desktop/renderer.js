@@ -111,14 +111,17 @@
 
       const buddy = await waitForPocketBuddy();
       const alreadyInstalled = await buddy.library.listInstalled();
-      const installedHashes = new Set((Array.isArray(alreadyInstalled) ? alreadyInstalled : []).map((pack) => pack?.archiveSha256).filter(Boolean));
+      const installedList = Array.isArray(alreadyInstalled) ? alreadyInstalled : [];
+      const installedByHash = new Map(installedList.map((pack) => [pack?.archiveSha256, pack]).filter(([hash]) => hash));
       let installed = 0;
       let skipped = 0;
       const installedPacks = [];
 
       for (const entry of entries) {
         if (!entry?.sha256 || !entry?.importName) throw new Error("Bundled art manifest entry is incomplete.");
-        if (installedHashes.has(entry.sha256)) {
+        const existing = installedByHash.get(entry.sha256);
+        if (existing) {
+          if (entry.kind === "human" && existing.id) await buddy.library.setHomeHuman(existing.id);
           skipped += 1;
           continue;
         }
@@ -128,7 +131,8 @@
         const file = new File([bytes], entry.importName, { type: "application/zip", lastModified: 0 });
         const pack = await buddy.library.importFile(file);
         if (pack?.archiveSha256 !== entry.sha256) throw new Error(`Pocket Buddy importer SHA mismatch for ${entry.displayName || entry.importName}.`);
-        installedHashes.add(entry.sha256);
+        if (entry.kind === "human" && pack?.id) await buddy.library.setHomeHuman(pack.id);
+        installedByHash.set(entry.sha256, pack);
         installedPacks.push(pack);
         installed += 1;
       }
