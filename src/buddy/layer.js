@@ -1,0 +1,81 @@
+import { createBuddyStorage } from "./storage.js";
+import { createBuddyBrain } from "./brain.js";
+import { createPetLibrary } from "./pet-importer.js";
+import { createPetRuntime } from "./pet-runtime.js";
+import { createHome } from "./home.js";
+import { PRISMTEK_PACK_RECIPES, OPENPETS_GALLERY_URL } from "./pet-recipes.js";
+
+let catalogCache = null;
+async function openPetsCatalog() {
+  if (catalogCache) return catalogCache;
+  try {
+    const first = await fetch("https://openpets.dev/pets/catalog.v3.json", { credentials:"omit", cache:"force-cache" });
+    if (!first.ok) throw new Error(`catalog ${first.status}`);
+    const index = await first.json(), all = [];
+    const add = e => { if(e&&typeof e.id==="string"&&typeof e.displayName==="string"&&!all.some(x=>x.id===e.id)) all.push(e); };
+    (Array.isArray(index?.pets)?index.pets:Array.isArray(index?.items)?index.items:[]).forEach(add);
+    for (const page of Array.isArray(index?.pages)?index.pages:[]) {
+      const url = typeof page==="string" ? new URL(page, "https://openpets.dev/pets/").href : typeof page?.url==="string" ? new URL(page.url, "https://openpets.dev/pets/").href : null;
+      if (!url) continue; const r=await fetch(url,{credentials:"omit",cache:"force-cache"}); if(!r.ok) continue; const data=await r.json(); (Array.isArray(data)?data:Array.isArray(data?.pets)?data.pets:Array.isArray(data?.items)?data.items:[]).forEach(add);
+    }
+    catalogCache=all; return all;
+  } catch (error) { console.warn("Pocket Buddy: OpenPets catalog unavailable on this host", error); return []; }
+}
+const waitRoot=()=>new Promise((resolve,reject)=>{let n=0;const timer=setInterval(()=>{const host=document.getElementById("birb-shadow-host");if(host?.shadowRoot){clearInterval(timer);resolve(host.shadowRoot)}else if(++n>240){clearInterval(timer);reject(new Error("Pocket Bird runtime did not create its shadow root."))}},50)});
+const btn=(label,fn,cls="")=>{const b=document.createElement("button");b.textContent=label;b.className=cls;b.onclick=fn;return b};
+function closeBaseMenu(root){root.getElementById("birb-menu")?.remove();root.getElementById("birb-menu-exit")?.remove()}
+function windowBox(root,id,title){root.getElementById(id)?.remove();const w=document.createElement("div");w.id=id;w.className="birb-window pb-window";const h=document.createElement("div");h.className="birb-window-header";const t=document.createElement("div");t.className="birb-window-title";t.textContent=title;const x=document.createElement("div");x.className="birb-window-close";x.textContent="x";x.onclick=()=>w.remove();h.append(t,x);const c=document.createElement("div");c.className="birb-window-content pb-content";w.append(h,c);root.append(w);w.style.left=`${Math.max(8,innerWidth/2-w.offsetWidth/2)}px`;w.style.top=`${Math.max(8,innerHeight/2-w.offsetHeight/2)}px`;return{w,c}}
+function toast(root,text){const e=document.createElement("div");e.className="pb-toast";e.textContent=text;root.append(e);setTimeout(()=>e.remove(),2200)}
+function styles(root){if(root.getElementById("pb-layer-style"))return;const s=document.createElement("style");s.id="pb-layer-style";s.textContent=`.pb-window{width:min(420px,calc(100vw - 24px));max-height:min(620px,calc(100vh - 24px))}.pb-content{padding:8px;gap:7px;overflow:auto;align-items:stretch}.pb-menu-item{width:calc(100% - 4px)}.pb-row{display:flex;gap:6px;flex-wrap:wrap}.pb-row button,.pb-content button,.pb-content input{font:inherit;border:2px solid var(--birb-border-color);background:#fff8e9;padding:5px;color:#222}.pb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;width:100%}.pb-card{border:2px solid #ffcf90;background:rgba(255,221,177,.5);padding:6px;min-height:75px;cursor:pointer}.pb-card.locked{opacity:.55;filter:grayscale(1)}.pb-small{font-size:10px;opacity:.72}.pb-bar{height:8px;border:1px solid #765f51;background:#ead8be}.pb-bar>i{display:block;height:100%;background:var(--birb-highlight)}.pb-chat{height:220px;overflow:auto;border:2px solid #ffcf90;background:#fff8e9;padding:6px}.pb-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:2147483647;background:#ffecda;border:2px solid #3b3045;padding:6px;box-shadow:4px 4px 0 #3b3045;font:12px Monocraft,monospace}`;root.append(s)}
+function importButton(root,library,after){const input=document.createElement("input");input.type="file";input.accept=".zip,application/zip";input.hidden=true;input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{const pack=await library.importFile(file);toast(root,`${pack.displayName} imported`);await after(pack)}catch(e){toast(root,e?.message||"Import failed")}finally{input.value=""}};root.append(input);return btn("Import pet ZIP",()=>input.click())}
+function menuItem(label,fn){const e=document.createElement("div");e.className="birb-menu-item pb-menu-item";e.textContent=label;e.onclick=()=>{fn();};return e}
+export async function initializeBuddyLayer(){
+  if(window.PocketBuddy?.coreVersion)return window.PocketBuddy; const root=await waitRoot();styles(root);const storage=createBuddyStorage();const library=createPetLibrary(storage);let runtime;
+  const brain=createBuddyBrain(storage,{onReaction:r=>runtime?.react(r)});await brain.load();runtime=createPetRuntime(library,root);await runtime.start();
+  const home=createHome({storage,brain,petRuntime:runtime,petLibrary:library,shadowRoot:root});
+  async function care(action){const result=await brain.care(action);if(action==="feed")runtime.react("eating",1400);toast(root,result.message);return result}
+  function showCare(){closeBaseMenu(root);const {c}=windowBox(root,"pb-care","Care");const snap=brain.snapshot();for(const [k,label] of [["hunger","Food"],["energy","Energy"],["happiness","Fun"],["affection","Bond"],["health","Health"]]){const row=document.createElement("div");row.textContent=`${label} ${Math.round(snap.lifecycle[k])}`;const bar=document.createElement("div");bar.className="pb-bar";bar.innerHTML=`<i style="width:${Math.round(snap.lifecycle[k])}%"></i>`;c.append(row,bar)}const r=document.createElement("div");r.className="pb-row";for(const [a,l] of [["feed","Feed"],["play","Play"],["pet","Pet"],["nap","Nap"],["clean","Clean"],["medicine","Medicine"]])r.append(btn(l,()=>care(a).then(showCare)));c.append(r)}
+  function showBrain(){closeBaseMenu(root);const {c}=windowBox(root,"pb-brain","Buddy Brain");const s=brain.snapshot();c.innerHTML=`<b>${s.displayName}</b><div class="pb-small">${s.stage} • level ${s.level} • ${s.mood}</div><div>Personality and relationship memory belong to this Buddy across Pocket Buddy surfaces.</div><div class="pb-small">Trust ${Math.round(s.brain.relationship.trust*100)} • Familiarity ${Math.round(s.brain.relationship.familiarity*100)} • Notes ${s.brain.notes.length}</div>`;const name=document.createElement("input");name.value=s.displayName;name.maxLength=64;const note=document.createElement("input");note.placeholder="Remember a note…";c.append(name,btn("Rename",()=>brain.rename(name.value).then(()=>toast(root,"Buddy renamed"))),note,btn("Remember",()=>brain.addNote(note.value).then(()=>{note.value="";toast(root,"Remembered") })))}
+  function showTalk(){closeBaseMenu(root);const {c}=windowBox(root,"pb-talk",`Talk to ${brain.snapshot().displayName}`);const log=document.createElement("div");log.className="pb-chat";for(const m of brain.snapshot().brain.messages.slice(-20)){const d=document.createElement("div");d.textContent=`${m.role==="user"?"You":"Buddy"}: ${m.text}`;log.append(d)}const row=document.createElement("div");row.className="pb-row";const input=document.createElement("input");input.placeholder="Say something…";input.style.flex="1";const send=btn("Send",async()=>{const text=input.value.trim();if(!text)return;input.value="";await brain.talk(text);showTalk()});input.onkeydown=e=>{if(e.key==="Enter")send.click()};row.append(input,send);c.append(log,row);setTimeout(()=>input.focus(),0)}
+  async function selectPet(id){await library.setActive(id);await runtime.select(id);toast(root,id==="pocket-bird"?"Pocket Bird active":"Buddy active")}
+  async function showPets(){closeBaseMenu(root);const {c}=windowBox(root,"pb-pets","Buddies & Field Guide");const intro=document.createElement("div");intro.className="pb-small";intro.textContent="Pocket Bird collection stays intact. Add Prismtek PixelLab or any OpenPets package here; private art stays local.";c.append(intro);const grid=document.createElement("div");grid.className="pb-grid";const active=await library.activeId(),installed=await library.listInstalled();
+    const card=(name,desc,fn,locked=false)=>{const e=document.createElement("div");e.className=`pb-card${locked?" locked":""}`;e.innerHTML=`<b>${name}</b><div class="pb-small">${desc}</div>`;if(fn)e.onclick=fn;grid.append(e)};card("Pocket Bird","Original birds, hats, feathers and motion.",()=>selectPet("pocket-bird"));for(const recipe of PRISMTEK_PACK_RECIPES.filter(r=>r.kind==="buddy")){const pack=installed.find(x=>x.id===recipe.id);card(recipe.displayName,pack?`${pack.source} • ${pack.id===active?"ACTIVE":"tap to use"}`:`Import ${recipe.archiveName}`,pack?()=>selectPet(pack.id):null,!pack)}for(const pack of installed.filter(x=>x.kind!=="human"&&!PRISMTEK_PACK_RECIPES.some(r=>r.id===x.id)))card(pack.displayName,`${pack.source}${pack.id===active?" • ACTIVE":""}`,()=>selectPet(pack.id));c.append(grid,importButton(root,library,async pack=>{if(pack.kind==="human"){await library.setHomeHuman(pack.id);await home.reloadHuman()}else{await selectPet(pack.id)}showPets()}));
+    const human=installed.find(x=>x.kind==="human");c.append(Object.assign(document.createElement("div"),{textContent:human?`Home player: ${human.displayName}`:"Home player: import Ani_Iso_Human.zip for your exact human"}));
+    c.append(btn("Browse OpenPets Gallery",showGallery),btn("Open OpenPets website",()=>window.open(OPENPETS_GALLERY_URL,"_blank","noopener")));
+  }
+  async function installCatalogPet(entry){if(typeof entry.zip!=="string"&&!entry.downloadUrl) return toast(root,"This catalog entry has no package URL");const url=entry.zip||entry.downloadUrl;try{const r=await fetch(url,{credentials:"omit"});if(!r.ok)throw new Error(`download ${r.status}`);const blob=await r.blob();const file=new File([blob],`${entry.id}.zip`,{type:"application/zip"});const pack=await library.importFile(file);await selectPet(pack.id);toast(root,`${pack.displayName} installed`)}catch(e){toast(root,"Host blocked direct install; download the ZIP and use Import pet ZIP")}}
+  async function showGallery(){closeBaseMenu(root);const {c}=windowBox(root,"pb-gallery","OpenPets Gallery");c.append(Object.assign(document.createElement("div"),{className:"pb-small",textContent:"Loading the current OpenPets catalog…"}));const pets=await openPetsCatalog();c.innerHTML="";if(!pets.length){c.append(Object.assign(document.createElement("div"),{textContent:"This page blocks the OpenPets catalog. You can still import any OpenPets ZIP locally."}),importButton(root,library,async p=>{await selectPet(p.id);showGallery()}));return}const search=document.createElement("input");search.placeholder=`Search ${pets.length} OpenPets pets…`;const grid=document.createElement("div");grid.className="pb-grid";const render=()=>{grid.innerHTML="";const q=search.value.trim().toLowerCase();for(const p of pets.filter(x=>!q||`${x.displayName} ${x.description||""} ${x.id}`.toLowerCase().includes(q)).slice(0,80)){const e=document.createElement("div");e.className="pb-card";e.innerHTML=`<b>${p.displayName}</b><div class="pb-small">${p.description||p.id}</div>`;e.onclick=()=>installCatalogPet(p);grid.append(e)}};search.oninput=render;c.append(search,grid);render()}
+  function augmentMenu(menu){
+    if(menu.dataset.pocketBuddy)return; menu.dataset.pocketBuddy="1";
+    const content=menu.querySelector(".birb-window-content"); if(!content)return;
+    const first=content.querySelector(".birb-menu-item");
+    if(first&&!first.dataset.pocketBuddyCare){
+      first.dataset.pocketBuddyCare="1";
+      first.addEventListener("click",()=>{void brain.care("pet").then(result=>toast(root,result.message));});
+    }
+    const items=[
+      menuItem("Talk",()=>{closeBaseMenu(root);showTalk()}),
+      menuItem("Home",()=>{closeBaseMenu(root);home.open()}),
+      menuItem("Care",()=>{closeBaseMenu(root);showCare()}),
+      menuItem("Buddy Brain",()=>{closeBaseMenu(root);showBrain()}),
+      menuItem("Buddies",()=>{closeBaseMenu(root);showPets()}),
+    ];
+    let cursor=first;
+    for(const item of items){ if(cursor){cursor.after(item);cursor=item}else content.append(item); }
+  }
+  function augmentFieldGuide(guide){
+    if(guide.dataset.pocketBuddy)return; guide.dataset.pocketBuddy="1";
+    const content=guide.querySelector(".birb-window-content"); if(!content)return;
+    const section=document.createElement("div"); section.className="pb-guide-bridge";
+    const label=document.createElement("div"); label.className="birb-field-guide-section-label"; label.textContent="----- Buddies -----";
+    const note=document.createElement("div"); note.className="birb-field-guide-description"; note.textContent="Pocket Bird species live above. Prismtek Buddies and OpenPets packs live in the same Pocket Buddy Field Guide.";
+    const open=btn("Open Buddies & OpenPets",()=>showPets()); open.style.margin="6px 10px 10px";
+    section.append(label,note,open); content.append(section);
+  }
+  const observer=new MutationObserver(()=>{
+    const menu=root.getElementById("birb-menu"); if(menu)augmentMenu(menu);
+    const guide=root.getElementById("birb-field-guide"); if(guide)augmentFieldGuide(guide);
+  }); observer.observe(root,{childList:true,subtree:true});
+  setInterval(()=>void brain.tick(),60_000);
+  window.PocketBuddy={coreVersion:"2026.08.07",brain,library,runtime,home,showPets,showTalk,showCare,showBrain,care,openPetsCatalog};window.dispatchEvent(new CustomEvent("pocket-buddy-core-ready",{detail:{version:window.PocketBuddy.coreVersion}}));return window.PocketBuddy;
+}

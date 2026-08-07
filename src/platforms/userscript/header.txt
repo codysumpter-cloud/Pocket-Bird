@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Pocket Bird
-// @namespace    https://idreesinc.com
+// @name         Pocket Buddy
+// @namespace    https://prismtek.dev/pocket-buddy
 // @version      __VERSION__
-// @description  It's a pet bird in your browser, what more could you want?
-// @author       Idrees
-// @downloadURL  https://github.com/IdreesInc/Pocket-Bird/raw/refs/heads/main/dist/userscript/birb.user.js
-// @updateURL    https://github.com/IdreesInc/Pocket-Bird/raw/refs/heads/main/dist/userscript/birb.user.js
+// @description  A tiny Buddy with pets, care, memory, Home, feathers, and the Pocket Bird field guide.
+// @author       Prismtek (forked from Pocket Bird by Idrees Hassan)
+// @downloadURL  https://github.com/codysumpter-cloud/Pocket-Buddy/raw/refs/heads/main/dist/userscript/birb.user.js
+// @updateURL    https://github.com/codysumpter-cloud/Pocket-Buddy/raw/refs/heads/main/dist/userscript/birb.user.js
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue

@@ -1,0 +1,56 @@
+name: Pocket Buddy core CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Buddy regression tests
+        run: node --test tests/buddy-brain.test.mjs
+      - name: Source syntax checks
+        run: |
+          node --check src/buddy/brain.js
+          node --check src/buddy/storage.js
+          node --check src/buddy/zip.js
+          node --check src/buddy/pet-recipes.js
+          node --check src/buddy/pet-importer.js
+          node --check src/buddy/pet-runtime.js
+          node --check src/buddy/home.js
+          node --check src/buddy/layer.js
+      - name: Build every Pocket Bird delivery format
+        run: npm run build
+      - name: Verify generated targets
+        run: |
+          test -s dist/web/birb.embed.js
+          test -s dist/userscript/birb.user.js
+          test -s dist/extension/birb.js
+          test -s dist/extension/manifest.json
+          test -s dist/extension.zip
+          test -s dist/obsidian/main.js
+          test -s dist/obsidian/manifest.json
+          grep -q 'PocketBuddy' dist/web/birb.embed.js
+          grep -q 'PocketBuddy' dist/userscript/birb.user.js
+          grep -q 'PocketBuddy' dist/extension/birb.js
+          grep -q 'PocketBuddy' dist/obsidian/main.js
+          grep -q '"name": "Pocket Buddy"' dist/extension/manifest.json
+          grep -q '"name": "Pocket Buddy"' dist/obsidian/manifest.json
+      - name: Upload testable all-formats build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocket-buddy-all-formats
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
