@@ -45,8 +45,37 @@ export async function initializeBuddyLayer(){
   }
   async function installCatalogPet(entry){if(typeof entry.zip!=="string"&&!entry.downloadUrl) return toast(root,"This catalog entry has no package URL");const url=entry.zip||entry.downloadUrl;try{const r=await fetch(url,{credentials:"omit"});if(!r.ok)throw new Error(`download ${r.status}`);const blob=await r.blob();const file=new File([blob],`${entry.id}.zip`,{type:"application/zip"});const pack=await library.importFile(file);await selectPet(pack.id);toast(root,`${pack.displayName} installed`)}catch(e){toast(root,"Host blocked direct install; download the ZIP and use Import pet ZIP")}}
   async function showGallery(){closeBaseMenu(root);const {c}=windowBox(root,"pb-gallery","OpenPets Gallery");c.append(Object.assign(document.createElement("div"),{className:"pb-small",textContent:"Loading the current OpenPets catalog…"}));const pets=await openPetsCatalog();c.innerHTML="";if(!pets.length){c.append(Object.assign(document.createElement("div"),{textContent:"This page blocks the OpenPets catalog. You can still import any OpenPets ZIP locally."}),importButton(root,library,async p=>{await selectPet(p.id);showGallery()}));return}const search=document.createElement("input");search.placeholder=`Search ${pets.length} OpenPets pets…`;const grid=document.createElement("div");grid.className="pb-grid";const render=()=>{grid.innerHTML="";const q=search.value.trim().toLowerCase();for(const p of pets.filter(x=>!q||`${x.displayName} ${x.description||""} ${x.id}`.toLowerCase().includes(q)).slice(0,80)){const e=document.createElement("div");e.className="pb-card";e.innerHTML=`<b>${p.displayName}</b><div class="pb-small">${p.description||p.id}</div>`;e.onclick=()=>installCatalogPet(p);grid.append(e)}};search.oninput=render;c.append(search,grid);render()}
-  function augmentMenu(menu){if(menu.dataset.pocketBuddy)return;menu.dataset.pocketBuddy="1";const content=menu.querySelector(".birb-window-content");if(!content)return;const first=content.querySelector(".birb-menu-item");const items=[menuItem("Talk",()=>{closeBaseMenu(root);showTalk()}),menuItem("Home",()=>{closeBaseMenu(root);home.open()}),menuItem("Care",()=>{closeBaseMenu(root);showCare()}),menuItem("Buddy Brain",()=>{closeBaseMenu(root);showBrain()}),menuItem("Buddies",()=>{closeBaseMenu(root);showPets()})];for(const item of items)first?.after(item)}
-  const observer=new MutationObserver(()=>{const menu=root.getElementById("birb-menu");if(menu)augmentMenu(menu)});observer.observe(root,{childList:true,subtree:true});
+  function augmentMenu(menu){
+    if(menu.dataset.pocketBuddy)return; menu.dataset.pocketBuddy="1";
+    const content=menu.querySelector(".birb-window-content"); if(!content)return;
+    const first=content.querySelector(".birb-menu-item");
+    if(first&&!first.dataset.pocketBuddyCare){
+      first.dataset.pocketBuddyCare="1";
+      first.addEventListener("click",()=>{void brain.care("pet").then(result=>toast(root,result.message));});
+    }
+    const items=[
+      menuItem("Talk",()=>{closeBaseMenu(root);showTalk()}),
+      menuItem("Home",()=>{closeBaseMenu(root);home.open()}),
+      menuItem("Care",()=>{closeBaseMenu(root);showCare()}),
+      menuItem("Buddy Brain",()=>{closeBaseMenu(root);showBrain()}),
+      menuItem("Buddies",()=>{closeBaseMenu(root);showPets()}),
+    ];
+    let cursor=first;
+    for(const item of items){ if(cursor){cursor.after(item);cursor=item}else content.append(item); }
+  }
+  function augmentFieldGuide(guide){
+    if(guide.dataset.pocketBuddy)return; guide.dataset.pocketBuddy="1";
+    const content=guide.querySelector(".birb-window-content"); if(!content)return;
+    const section=document.createElement("div"); section.className="pb-guide-bridge";
+    const label=document.createElement("div"); label.className="birb-field-guide-section-label"; label.textContent="----- Buddies -----";
+    const note=document.createElement("div"); note.className="birb-field-guide-description"; note.textContent="Pocket Bird species live above. Prismtek Buddies and OpenPets packs live in the same Pocket Buddy Field Guide.";
+    const open=btn("Open Buddies & OpenPets",()=>showPets()); open.style.margin="6px 10px 10px";
+    section.append(label,note,open); content.append(section);
+  }
+  const observer=new MutationObserver(()=>{
+    const menu=root.getElementById("birb-menu"); if(menu)augmentMenu(menu);
+    const guide=root.getElementById("birb-field-guide"); if(guide)augmentFieldGuide(guide);
+  }); observer.observe(root,{childList:true,subtree:true});
   setInterval(()=>void brain.tick(),60_000);
   window.PocketBuddy={coreVersion:"2026.08.07",brain,library,runtime,home,showPets,showTalk,showCare,showBrain,care,openPetsCatalog};window.dispatchEvent(new CustomEvent("pocket-buddy-core-ready",{detail:{version:window.PocketBuddy.coreVersion}}));return window.PocketBuddy;
 }
