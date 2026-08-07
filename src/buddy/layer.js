@@ -4,31 +4,70 @@ import { createPetLibrary } from "./pet-importer.js";
 import { createPetRuntime } from "./pet-runtime.js";
 import { createHome } from "./home.js";
 import { createThemeController } from "./theme.js";
-import { PRISMTEK_PACK_RECIPES, OPENPETS_GALLERY_URL } from "./pet-recipes.js";
+import { OPENPETS_GALLERY_URL } from "./pet-recipes.js";
 
 const POCKET_BUDDY_VERSION = "__POCKET_BUDDY_VERSION__";
+const OPENPETS_CATALOG_V3 = "https://openpets.dev/pets/catalog.v3.json";
+const OPENPETS_BASE = "https://openpets.dev/pets/";
+const OPENPETS_VISIBLE_STEP = 80;
+
 let catalogCache = null;
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeOpenPetsUrl(value, base = OPENPETS_BASE) {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  try {
+    const url = new URL(value, base);
+    if (url.protocol !== "https:") return null;
+    if (url.hostname !== "openpets.dev" && !url.hostname.endsWith(".openpets.dev")) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCatalogEntry(value) {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.displayName !== "string") return null;
+  const id = value.id.trim().slice(0, 80);
+  const displayName = value.displayName.trim().slice(0, 120);
+  if (!id || !displayName) return null;
+  const zip = safeOpenPetsUrl(value.zip ?? value.downloadUrl ?? value.packageUrl, OPENPETS_BASE);
+  return {
+    ...value,
+    id,
+    displayName,
+    description: typeof value.description === "string" ? value.description.trim().slice(0, 500) : "",
+    ...(zip ? { zip } : {}),
+  };
+}
 
 async function openPetsCatalog() {
   if (catalogCache) return catalogCache;
   try {
-    const first = await fetch("https://openpets.dev/pets/catalog.v3.json", { credentials: "omit", cache: "force-cache" });
+    const first = await fetch(OPENPETS_CATALOG_V3, { credentials: "omit", cache: "force-cache" });
     if (!first.ok) throw new Error(`catalog ${first.status}`);
     const index = await first.json();
     const all = [];
+    const seen = new Set();
     const add = (entry) => {
-      if (entry && typeof entry.id === "string" && typeof entry.displayName === "string" && !all.some((item) => item.id === entry.id)) all.push(entry);
+      const pet = normalizeCatalogEntry(entry);
+      if (!pet || seen.has(pet.id)) return;
+      seen.add(pet.id);
+      all.push(pet);
     };
     (Array.isArray(index?.pets) ? index.pets : Array.isArray(index?.items) ? index.items : []).forEach(add);
     for (const page of Array.isArray(index?.pages) ? index.pages : []) {
-      const url = typeof page === "string"
-        ? new URL(page, "https://openpets.dev/pets/").href
-        : typeof page?.url === "string" ? new URL(page.url, "https://openpets.dev/pets/").href : null;
+      const raw = typeof page === "string" ? page : typeof page?.url === "string" ? page.url : null;
+      const url = safeOpenPetsUrl(raw, OPENPETS_BASE);
       if (!url) continue;
       const response = await fetch(url, { credentials: "omit", cache: "force-cache" });
       if (!response.ok) continue;
       const data = await response.json();
-      (Array.isArray(data) ? data : Array.isArray(data?.pets) ? data.pets : Array.isArray(data?.items) ? data.items : []).forEach(add);
+      const entries = Array.isArray(data) ? data : Array.isArray(data?.pets) ? data.pets : Array.isArray(data?.items) ? data.items : [];
+      entries.forEach(add);
     }
     catalogCache = all;
     return all;
@@ -52,11 +91,11 @@ const waitRoot = () => new Promise((resolve, reject) => {
   }, 50);
 });
 
-const btn = (label, fn, className = "") => {
+const btn = (label, action, className = "") => {
   const button = document.createElement("button");
   button.textContent = label;
   button.className = className;
-  button.onclick = fn;
+  button.onclick = action;
   return button;
 };
 
@@ -67,32 +106,33 @@ function closeBaseMenu(root) {
 
 function windowBox(root, id, title) {
   root.getElementById(id)?.remove();
-  const window = document.createElement("div");
-  window.id = id;
-  window.className = "birb-window pb-window";
+  const windowElement = document.createElement("div");
+  windowElement.id = id;
+  windowElement.className = "birb-window pb-window";
   const header = document.createElement("div");
   header.className = "birb-window-header";
-  const heading = document.createElement("div");
-  heading.className = "birb-window-title";
-  heading.textContent = title;
+  const titleElement = document.createElement("div");
+  titleElement.className = "birb-window-title";
+  titleElement.textContent = title;
   const close = document.createElement("div");
   close.className = "birb-window-close";
   close.textContent = "x";
-  close.onclick = () => window.remove();
-  header.append(heading, close);
+  close.onclick = () => windowElement.remove();
+  header.append(titleElement, close);
   const content = document.createElement("div");
   content.className = "birb-window-content pb-content";
-  window.append(header, content);
-  root.append(window);
-  window.style.left = `${Math.max(8, innerWidth / 2 - window.offsetWidth / 2)}px`;
-  window.style.top = `${Math.max(8, innerHeight / 2 - window.offsetHeight / 2)}px`;
-  return { w: window, c: content };
+  windowElement.append(header, content);
+  root.append(windowElement);
+  windowElement.style.left = `${Math.max(8, innerWidth / 2 - windowElement.offsetWidth / 2)}px`;
+  windowElement.style.top = `${Math.max(8, innerHeight / 2 - windowElement.offsetHeight / 2)}px`;
+  return { w: windowElement, c: content };
 }
 
 function toast(root, text) {
+  root.querySelector(".pb-toast")?.remove();
   const element = document.createElement("div");
   element.className = "pb-toast";
-  element.textContent = text;
+  element.textContent = String(text).slice(0, 220);
   root.append(element);
   setTimeout(() => element.remove(), 2200);
 }
@@ -108,16 +148,29 @@ function styles(root) {
     .pb-row{display:flex;gap:6px;flex-wrap:wrap}
     .pb-row button,.pb-content button,.pb-content input{font:inherit;border:2px solid var(--birb-border-color);background:var(--birb-background-color);padding:5px;color:#222}
     .pb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;width:100%}
-    .pb-card{border:2px solid var(--birb-highlight);background:color-mix(in srgb,var(--birb-highlight) 18%,var(--birb-background-color));padding:6px;min-height:75px;cursor:pointer}
-    .pb-card.locked{opacity:.55;filter:grayscale(1)}
+    .pb-card{position:relative;border:2px solid var(--birb-highlight);background:color-mix(in srgb,var(--birb-highlight) 18%,var(--birb-background-color));padding:6px;min-height:75px;cursor:pointer;box-sizing:border-box}
+    .pb-card:hover,.pb-card.active{outline:2px solid var(--birb-border-color);outline-offset:1px}
+    .pb-card.locked{opacity:.55;filter:grayscale(1);cursor:default}
     .pb-card.selected{outline:2px solid var(--birb-border-color);outline-offset:1px}
     .pb-small{font-size:10px;opacity:.72}
     .pb-bar{height:8px;border:1px solid var(--birb-border-color);background:color-mix(in srgb,var(--birb-background-color) 75%,#777)}
     .pb-bar>i{display:block;height:100%;background:var(--birb-highlight)}
     .pb-chat{height:220px;overflow:auto;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:6px}
     .pb-toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:2147483647;background:var(--birb-background-color);border:2px solid var(--birb-border-color);padding:6px;box-shadow:4px 4px 0 var(--birb-border-color);font:12px Monocraft,monospace}
+    .pb-guide-tabs{display:flex;gap:4px;padding:6px 8px;position:sticky;top:0;z-index:3;background:var(--birb-background-color)}
+    .pb-guide-tabs button{flex:1;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px 3px;color:#222;cursor:pointer}
+    .pb-guide-tabs button.active{background:var(--birb-highlight);color:#fff}
+    .pb-guide-panel{width:100%;box-sizing:border-box}
+    .pb-guide-panel[hidden]{display:none!important}
+    .pb-guide-tools{display:flex;gap:6px;padding:7px 9px;flex-wrap:wrap}
+    .pb-guide-tools input{min-width:0;flex:1 1 190px;font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px;color:#222}
+    .pb-guide-tools button{font:10px Monocraft,monospace;border:2px solid var(--birb-highlight);background:var(--birb-background-color);padding:5px;color:#222;cursor:pointer}
+    .pb-guide-status{padding:2px 9px 6px;font:9px Monocraft,monospace;opacity:.68}
+    .pb-guide-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px;padding:4px 9px 12px}
+    .pb-menu-separator{height:2px;margin:3px 6px;background:var(--birb-highlight);opacity:.45}
     .pb-theme-swatch{height:24px;border:1px solid var(--birb-border-color);margin-bottom:5px;display:flex;overflow:hidden}
     .pb-theme-swatch>i{display:block;flex:1}
+    #birb-field-guide.pb-field-guide{width:min(650px,94vw)}
   `;
   root.append(style);
 }
@@ -144,17 +197,37 @@ function importButton(root, library, after) {
   return btn("Import pet ZIP", () => input.click());
 }
 
-function menuItem(label, fn) {
+function menuItem(label, action) {
   const element = document.createElement("div");
   element.className = "birb-menu-item pb-menu-item";
   element.textContent = label;
-  element.onclick = fn;
+  element.onclick = action;
+  return element;
+}
+
+function menuSeparator() {
+  const element = document.createElement("div");
+  element.className = "birb-window-separator pb-menu-separator";
   return element;
 }
 
 function isSettingsMenu(menu) {
+  if (menu.dataset.pocketBuddySubmenu) return false;
   const first = menu.querySelector(".birb-window-content > .birb-menu-item");
   return first?.textContent?.trim() === "Go Back";
+}
+
+function card(name, description, action, { active = false, locked = false } = {}) {
+  const element = document.createElement("div");
+  element.className = `pb-card${active ? " active" : ""}${locked ? " locked" : ""}`;
+  const title = document.createElement("b");
+  title.textContent = name;
+  const detail = document.createElement("div");
+  detail.className = "pb-small";
+  detail.textContent = description;
+  element.append(title, detail);
+  if (action && !locked) element.onclick = action;
+  return element;
 }
 
 export async function initializeBuddyLayer() {
@@ -200,21 +273,37 @@ export async function initializeBuddyLayer() {
     c.append(actions);
   }
 
-  function showBrain() {
+  function showStatus() {
     closeBaseMenu(root);
-    const { c } = windowBox(root, "pb-brain", "Buddy Brain");
-    const state = brain.snapshot();
-    c.innerHTML = `<b>${state.displayName}</b><div class="pb-small">${state.stage} • level ${state.level} • ${state.mood}</div><div>Personality and relationship memory belong to this Buddy across Pocket Buddy surfaces.</div><div class="pb-small">Trust ${Math.round(state.brain.relationship.trust * 100)} • Familiarity ${Math.round(state.brain.relationship.familiarity * 100)} • Notes ${state.brain.notes.length}</div>`;
+    const { c } = windowBox(root, "pb-brain", "Buddy");
+    const snapshot = brain.snapshot();
+    const title = document.createElement("b");
+    title.textContent = snapshot.displayName;
+    const meta = document.createElement("div");
+    meta.className = "pb-small";
+    meta.textContent = `${snapshot.stage} • level ${snapshot.level} • ${snapshot.mood}`;
+    const explanation = document.createElement("div");
+    explanation.textContent = "Personality, relationship memory, stats, notes, and care history belong to this Buddy everywhere Pocket Buddy runs.";
+    const relationship = document.createElement("div");
+    relationship.className = "pb-small";
+    relationship.textContent = `Trust ${Math.round(snapshot.brain.relationship.trust * 100)} • Familiarity ${Math.round(snapshot.brain.relationship.familiarity * 100)} • Notes ${snapshot.brain.notes.length}`;
     const name = document.createElement("input");
-    name.value = state.displayName;
+    name.value = snapshot.displayName;
     name.maxLength = 64;
     const note = document.createElement("input");
     note.placeholder = "Remember a note…";
     c.append(
+      title,
+      meta,
+      explanation,
+      relationship,
       name,
       btn("Rename", () => brain.rename(name.value).then(() => toast(root, "Buddy renamed"))),
       note,
-      btn("Remember", () => brain.addNote(note.value).then(() => { note.value = ""; toast(root, "Remembered"); })),
+      btn("Remember", () => brain.addNote(note.value).then(() => {
+        note.value = "";
+        toast(root, "Remembered");
+      })),
     );
   }
 
@@ -240,7 +329,9 @@ export async function initializeBuddyLayer() {
       await brain.talk(text);
       showTalk();
     });
-    input.onkeydown = (event) => { if (event.key === "Enter") send.click(); };
+    input.onkeydown = (event) => {
+      if (event.key === "Enter") send.click();
+    };
     row.append(input, send);
     c.append(log, row);
     setTimeout(() => input.focus(), 0);
@@ -256,24 +347,24 @@ export async function initializeBuddyLayer() {
     grid.className = "pb-grid";
     const selected = themes.snapshot().id;
     for (const theme of themes.themes()) {
-      const card = document.createElement("div");
-      card.className = `pb-card${selected === theme.id ? " selected" : ""}`;
+      const themeCard = document.createElement("div");
+      themeCard.className = `pb-card${selected === theme.id ? " selected" : ""}`;
       if (theme.id === "auto") {
-        card.innerHTML = `<b>${theme.label}</b><div class="pb-small">${theme.description}</div>`;
+        themeCard.innerHTML = `<b>${theme.label}</b><div class="pb-small">${theme.description}</div>`;
       } else {
         const swatch = document.createElement("div");
         swatch.className = "pb-theme-swatch";
         swatch.innerHTML = `<i style="background:${theme.accent}"></i><i style="background:${theme.background}"></i>`;
         const label = document.createElement("b");
         label.textContent = theme.label;
-        card.append(swatch, label);
+        themeCard.append(swatch, label);
       }
-      card.onclick = async () => {
+      themeCard.onclick = async () => {
         await themes.set(theme.id);
         toast(root, theme.id === "auto" ? "Theme follows Buddy" : `${theme.label} theme active`);
         showThemes();
       };
-      grid.append(card);
+      grid.append(themeCard);
     }
     c.append(intro, grid);
   }
@@ -283,120 +374,234 @@ export async function initializeBuddyLayer() {
     await runtime.select(id);
     const pack = id === "pocket-bird" ? null : (await library.listInstalled()).find((item) => item.id === id) ?? null;
     await themes.setActiveBuddy(id, pack);
-    toast(root, id === "pocket-bird" ? "Pocket Bird active" : `${pack?.displayName ?? "Buddy"} active`);
+    toast(root, id === "pocket-bird" ? "Pocket Buddy pet active" : `${pack?.displayName ?? "Buddy"} active`);
   }
 
-  async function showPets() {
-    closeBaseMenu(root);
-    const { c } = windowBox(root, "pb-pets", "Buddies & Field Guide");
-    const intro = document.createElement("div");
-    intro.className = "pb-small";
-    intro.textContent = "Pocket Bird collection stays intact. Add Prismtek PixelLab or any OpenPets package here; private art stays local.";
-    c.append(intro);
-    const grid = document.createElement("div");
-    grid.className = "pb-grid";
-    const active = await library.activeId();
-    const installed = await library.listInstalled();
-    const card = (name, description, fn, locked = false, selected = false) => {
-      const element = document.createElement("div");
-      element.className = `pb-card${locked ? " locked" : ""}${selected ? " selected" : ""}`;
-      element.innerHTML = `<b>${name}</b><div class="pb-small">${description}</div>`;
-      if (fn) element.onclick = fn;
-      grid.append(element);
-    };
-    card("Pocket Bird", "Original birds, hats, feathers and motion.", () => selectPet("pocket-bird"), false, active === "pocket-bird");
-    for (const recipe of PRISMTEK_PACK_RECIPES.filter((item) => item.kind === "buddy")) {
-      const pack = installed.find((item) => item.id === recipe.id);
-      card(recipe.displayName, pack ? `${pack.source} • ${pack.id === active ? "ACTIVE" : "tap to use"}` : `Import ${recipe.archiveName}`, pack ? () => selectPet(pack.id) : null, !pack, pack?.id === active);
+  async function installCatalogPet(entry, refresh) {
+    if (!entry.zip) {
+      toast(root, "This catalog entry has no package URL. Download it from OpenPets and use Import pet ZIP.");
+      return;
     }
-    for (const pack of installed.filter((item) => item.kind !== "human" && !PRISMTEK_PACK_RECIPES.some((recipe) => recipe.id === item.id))) {
-      card(pack.displayName, `${pack.source}${pack.id === active ? " • ACTIVE" : ""}`, () => selectPet(pack.id), false, pack.id === active);
-    }
-    c.append(grid, importButton(root, library, async (pack) => {
-      if (pack.kind === "human") {
-        await library.setHomeHuman(pack.id);
-        await home.reloadHuman();
-      } else {
-        await selectPet(pack.id);
-      }
-      showPets();
-    }));
-    const human = installed.find((item) => item.kind === "human");
-    c.append(Object.assign(document.createElement("div"), { textContent: human ? `Home player: ${human.displayName}` : "Home player: import Ani_Iso_Human.zip for your exact human" }));
-    c.append(btn("Browse OpenPets Gallery", showGallery), btn("Open OpenPets website", () => window.open(OPENPETS_GALLERY_URL, "_blank", "noopener")));
-  }
-
-  async function installCatalogPet(entry) {
-    if (typeof entry.zip !== "string" && !entry.downloadUrl) return toast(root, "This catalog entry has no package URL");
-    const url = entry.zip || entry.downloadUrl;
     try {
-      const response = await fetch(url, { credentials: "omit" });
+      const response = await fetch(entry.zip, { credentials: "omit", redirect: "error" });
       if (!response.ok) throw new Error(`download ${response.status}`);
       const blob = await response.blob();
       const file = new File([blob], `${entry.id}.zip`, { type: "application/zip" });
       const pack = await library.importFile(file);
       await selectPet(pack.id);
       toast(root, `${pack.displayName} installed`);
-    } catch {
-      toast(root, "Host blocked direct install; download the ZIP and use Import pet ZIP");
+      await refresh?.();
+    } catch (error) {
+      console.warn("Pocket Buddy: direct OpenPets install failed", error);
+      toast(root, "Direct install was blocked. Download the ZIP and use My Pets → Import pet ZIP.");
     }
   }
 
-  async function showGallery() {
-    closeBaseMenu(root);
-    const { c } = windowBox(root, "pb-gallery", "OpenPets Gallery");
-    c.append(Object.assign(document.createElement("div"), { className: "pb-small", textContent: "Loading the current OpenPets catalog…" }));
-    const pets = await openPetsCatalog();
-    c.innerHTML = "";
-    if (!pets.length) {
-      c.append(
-        Object.assign(document.createElement("div"), { textContent: "This page blocks the OpenPets catalog. You can still import any OpenPets ZIP locally." }),
-        importButton(root, library, async (pack) => { await selectPet(pack.id); showGallery(); }),
-      );
-      return;
-    }
-    const search = document.createElement("input");
-    search.placeholder = `Search ${pets.length} OpenPets pets…`;
+  async function renderMyPets(panel) {
+    panel.textContent = "";
+    const tools = document.createElement("div");
+    tools.className = "pb-guide-tools";
+    const status = document.createElement("div");
+    status.className = "pb-guide-status";
     const grid = document.createElement("div");
-    grid.className = "pb-grid";
-    const render = () => {
-      grid.innerHTML = "";
+    grid.className = "pb-guide-grid";
+
+    const installed = await library.listInstalled();
+    const activeId = await library.activeId();
+    const humanId = await library.homeHumanId();
+
+    tools.append(importButton(root, library, async (pack) => {
+      if (pack.kind === "human") {
+        await library.setHomeHuman(pack.id);
+        await home.reloadHuman();
+        toast(root, `${pack.displayName} is now the Home player`);
+      } else {
+        await selectPet(pack.id);
+      }
+      await renderMyPets(panel);
+    }));
+    status.textContent = installed.length
+      ? `${installed.filter((pack) => pack.kind !== "human").length} Buddy pet${installed.filter((pack) => pack.kind !== "human").length === 1 ? "" : "s"} installed${humanId ? " • Home human installed" : ""}.`
+      : "No imported pets yet. Import a PixelLab or OpenPets ZIP.";
+
+    for (const pack of installed) {
+      if (pack.kind === "human") {
+        grid.append(card(
+          pack.displayName,
+          `${pack.source} • ${pack.id === humanId ? "HOME PLAYER" : "tap to use as Home player"}`,
+          async () => {
+            await library.setHomeHuman(pack.id);
+            await home.reloadHuman();
+            toast(root, `${pack.displayName} is now the Home player`);
+            await renderMyPets(panel);
+          },
+          { active: pack.id === humanId },
+        ));
+      } else {
+        grid.append(card(
+          pack.displayName,
+          `${pack.source}${pack.id === activeId ? " • ACTIVE" : " • tap to use"}`,
+          async () => {
+            await selectPet(pack.id);
+            await renderMyPets(panel);
+          },
+          { active: pack.id === activeId },
+        ));
+      }
+    }
+    panel.append(tools, status, grid);
+  }
+
+  async function renderOpenPets(panel) {
+    panel.textContent = "";
+    const tools = document.createElement("div");
+    tools.className = "pb-guide-tools";
+    const search = document.createElement("input");
+    search.placeholder = "Search every OpenPets pet…";
+    const website = btn("OpenPets website", () => window.open(OPENPETS_GALLERY_URL, "_blank", "noopener"));
+    tools.append(search, website);
+    const status = document.createElement("div");
+    status.className = "pb-guide-status";
+    status.textContent = "Loading the complete OpenPets catalog…";
+    const grid = document.createElement("div");
+    grid.className = "pb-guide-grid";
+    const more = btn("Show more", () => {});
+    more.style.margin = "0 9px 12px";
+    panel.append(tools, status, grid, more);
+
+    const pets = await openPetsCatalog();
+    const installed = await library.listInstalled();
+    const installedById = new Map(installed.map((pack) => [pack.id, pack]));
+    let visible = OPENPETS_VISIBLE_STEP;
+
+    const render = async () => {
       const query = search.value.trim().toLowerCase();
-      for (const pet of pets.filter((item) => !query || `${item.displayName} ${item.description || ""} ${item.id}`.toLowerCase().includes(query)).slice(0, 80)) {
-        const card = document.createElement("div");
-        card.className = "pb-card";
-        card.innerHTML = `<b>${pet.displayName}</b><div class="pb-small">${pet.description || pet.id}</div>`;
-        card.onclick = () => installCatalogPet(pet);
-        grid.append(card);
+      const matches = pets.filter((pet) => !query || `${pet.displayName} ${pet.id} ${pet.description}`.toLowerCase().includes(query));
+      const activeId = await library.activeId();
+      grid.textContent = "";
+      for (const pet of matches.slice(0, visible)) {
+        const installedPack = installedById.get(pet.id);
+        grid.append(card(
+          pet.displayName,
+          installedPack
+            ? `${installedPack.source}${pet.id === activeId ? " • ACTIVE" : " • installed"}`
+            : `${pet.description || pet.id}${pet.zip ? " • tap to install" : " • download ZIP to import"}`,
+          installedPack
+            ? async () => {
+                await selectPet(installedPack.id);
+                await render();
+              }
+            : () => installCatalogPet(pet, async () => {
+                const refreshed = await library.listInstalled();
+                installedById.clear();
+                for (const pack of refreshed) installedById.set(pack.id, pack);
+                await render();
+              }),
+          { active: Boolean(installedPack && pet.id === activeId) },
+        ));
+      }
+      status.textContent = pets.length
+        ? `${pets.length} OpenPets pets in the Field Guide${query ? ` • ${matches.length} match` : ""}.`
+        : "This host blocked the OpenPets catalog. My Pets can still import any OpenPets ZIP locally.";
+      more.hidden = matches.length <= visible;
+    };
+
+    search.oninput = () => {
+      visible = OPENPETS_VISIBLE_STEP;
+      void render();
+    };
+    more.onclick = () => {
+      visible += OPENPETS_VISIBLE_STEP;
+      void render();
+    };
+    await render();
+  }
+
+  function augmentFieldGuide(guide) {
+    if (guide.dataset.pocketBuddy) return;
+    const content = guide.querySelector(".birb-window-content");
+    const original = content?.firstElementChild;
+    if (!content || !original) return;
+    guide.dataset.pocketBuddy = "1";
+    guide.classList.add("pb-field-guide");
+
+    const tabs = document.createElement("div");
+    tabs.className = "pb-guide-tabs";
+    const pocketTab = btn("Pocket Buddy", () => activate("pocket"));
+    const myTab = btn("My Pets", () => activate("mine"));
+    const openTab = btn("OpenPets", () => activate("openpets"));
+    tabs.append(pocketTab, myTab, openTab);
+
+    const pocketPanel = document.createElement("div");
+    pocketPanel.className = "pb-guide-panel";
+    pocketPanel.append(original);
+    const myPanel = document.createElement("div");
+    myPanel.className = "pb-guide-panel";
+    const openPanel = document.createElement("div");
+    openPanel.className = "pb-guide-panel";
+    let openPetsLoaded = false;
+
+    const activate = (tab) => {
+      pocketPanel.hidden = tab !== "pocket";
+      myPanel.hidden = tab !== "mine";
+      openPanel.hidden = tab !== "openpets";
+      pocketTab.classList.toggle("active", tab === "pocket");
+      myTab.classList.toggle("active", tab === "mine");
+      openTab.classList.toggle("active", tab === "openpets");
+      if (tab === "mine") void renderMyPets(myPanel);
+      if (tab === "openpets" && !openPetsLoaded) {
+        openPetsLoaded = true;
+        void renderOpenPets(openPanel);
       }
     };
-    search.oninput = render;
-    c.append(search, grid);
-    render();
+
+    content.replaceChildren(tabs, pocketPanel, myPanel, openPanel);
+    activate("pocket");
+  }
+
+  function showBuddySubmenu(menu, rootNodes) {
+    const content = menu.querySelector(".birb-window-content");
+    if (!content) return;
+    menu.dataset.pocketBuddySubmenu = "1";
+    const goBack = menuItem("Go Back", () => {
+      delete menu.dataset.pocketBuddySubmenu;
+      content.replaceChildren(...rootNodes);
+    });
+    const status = menuItem("Status", () => showStatus());
+    const talk = menuItem("Talk", () => showTalk());
+    const careItem = menuItem("Care", () => showCare());
+    content.replaceChildren(goBack, menuSeparator(), status, talk, careItem);
   }
 
   function augmentMainMenu(menu) {
     if (menu.dataset.pocketBuddyMain) return;
-    menu.dataset.pocketBuddyMain = "1";
     const content = menu.querySelector(".birb-window-content");
     if (!content) return;
-    const first = content.querySelector(".birb-menu-item");
-    if (first && !first.dataset.pocketBuddyCare) {
-      first.dataset.pocketBuddyCare = "1";
-      first.addEventListener("click", () => { void brain.care("pet").then((result) => toast(root, result.message)); });
+    menu.dataset.pocketBuddyMain = "1";
+
+    const originalItems = [...content.querySelectorAll(":scope > .birb-menu-item")];
+    const first = originalItems[0];
+    if (!first) return;
+
+    first.textContent = "Pet Buddy";
+    first.addEventListener("click", () => {
+      void brain.care("pet").then((result) => toast(root, result.message));
+    });
+
+    for (const item of originalItems.slice(1)) {
+      const label = item.textContent?.trim() ?? "";
+      if (/^Hide (Bird|Birb)$/i.test(label)) item.textContent = "Hide Buddy";
+      if (/^Adopt A /i.test(label)) item.remove();
     }
-    const items = [
-      menuItem("Talk", () => { closeBaseMenu(root); showTalk(); }),
-      menuItem("Home", () => { closeBaseMenu(root); home.open(); }),
-      menuItem("Care", () => { closeBaseMenu(root); showCare(); }),
-      menuItem("Buddy Brain", () => { closeBaseMenu(root); showBrain(); }),
-      menuItem("Buddies", () => { closeBaseMenu(root); showPets(); }),
-    ];
-    let cursor = first;
-    for (const item of items) {
-      if (cursor) { cursor.after(item); cursor = item; }
-      else content.append(item);
-    }
+
+    const buddyItem = menuItem("Buddy", () => {});
+    const homeItem = menuItem("Home", () => {
+      closeBaseMenu(root);
+      void home.open();
+    });
+    first.after(buddyItem, homeItem);
+    const rootNodes = [...content.childNodes];
+    buddyItem.onclick = () => showBuddySubmenu(menu, rootNodes);
   }
 
   function augmentSettingsMenu(menu) {
@@ -404,36 +609,20 @@ export async function initializeBuddyLayer() {
     menu.dataset.pocketBuddySettings = "1";
     const content = menu.querySelector(".birb-window-content");
     if (!content) return;
-    const item = menuItem(() => "", () => {});
+    const item = menuItem("", () => {});
     item.textContent = `UI Theme: ${themes.snapshot().label}`;
-    item.onclick = () => { closeBaseMenu(root); showThemes(); };
+    item.onclick = () => {
+      closeBaseMenu(root);
+      showThemes();
+    };
     const firstSeparator = content.querySelector(".birb-window-separator");
     if (firstSeparator) firstSeparator.after(item);
     else content.append(item);
   }
 
-  function augmentFieldGuide(guide) {
-    if (guide.dataset.pocketBuddy) return;
-    guide.dataset.pocketBuddy = "1";
-    const content = guide.querySelector(".birb-window-content");
-    if (!content) return;
-    const section = document.createElement("div");
-    section.className = "pb-guide-bridge";
-    const label = document.createElement("div");
-    label.className = "birb-field-guide-section-label";
-    label.textContent = "----- Buddies -----";
-    const note = document.createElement("div");
-    note.className = "birb-field-guide-description";
-    note.textContent = "Pocket Bird species live above. Prismtek Buddies and OpenPets packs live in the same Pocket Buddy Field Guide.";
-    const open = btn("Open Buddies & OpenPets", () => showPets());
-    open.style.margin = "6px 10px 10px";
-    section.append(label, note, open);
-    content.append(section);
-  }
-
   const observer = new MutationObserver(() => {
     const menu = root.getElementById("birb-menu");
-    if (menu) {
+    if (menu && !menu.dataset.pocketBuddySubmenu) {
       if (isSettingsMenu(menu)) augmentSettingsMenu(menu);
       else augmentMainMenu(menu);
     }
@@ -451,10 +640,9 @@ export async function initializeBuddyLayer() {
     runtime,
     home,
     themes,
-    showPets,
     showTalk,
     showCare,
-    showBrain,
+    showStatus,
     showThemes,
     care,
     openPetsCatalog,
