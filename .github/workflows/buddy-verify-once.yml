@@ -1,0 +1,49 @@
+name: Buddy feature one-shot verification
+
+on:
+  push:
+    branches:
+      - feat/buddy-core-simple-menu
+    paths:
+      - .github/workflows/buddy-verify-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish-draft-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/buddy-core-simple-menu
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test Buddy contracts
+        run: npm test
+      - name: Build every Pocket Buddy target
+        run: npm run build
+      - name: Verify expected artifacts exist
+        run: |
+          test -s dist/web/birb.js
+          test -s dist/web/birb.embed.js
+          test -s dist/userscript/birb.user.js
+          test -s dist/extension/birb.js
+          test -s dist/extension/manifest.json
+          test -s dist/obsidian/main.js
+          test -s dist/obsidian/manifest.json
+          test -s dist/extension.zip
+      - name: Commit verified draft artifacts and remove one-shot workflow
+        run: |
+          rm .github/workflows/buddy-verify-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A dist build-cache.json .github/workflows/buddy-verify-once.yml
+          git commit -m "build: verify Pocket Buddy Buddy-first draft"
+          git push origin HEAD:feat/buddy-core-simple-menu
