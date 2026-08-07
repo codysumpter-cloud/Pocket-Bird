@@ -2762,8 +2762,8 @@
 				insertModal(`${birdBirb()} Mode`, message, settings().birbMode ? "radical, dude" : "sounds good");
 			}),
 			new Separator(),
-			new MenuItem(() => `Source Code ${isPetBoostActive() ? " ❤" : ""}`, () => { window.open("https://github.com/IdreesInc/Pocket-Bird"); }),
-			new MenuItem("Build 2026.8.7", () => { alert("Thank you for using Pocket Bird! You are on version: 2026.8.7"); }, undefined, false),
+			new MenuItem(() => `Source Code ${isPetBoostActive() ? " ❤" : ""}`, () => { window.open("https://github.com/codysumpter-cloud/Pocket-Buddy"); }),
+			new MenuItem("Pocket Buddy 1.1.0", () => { alert("Thank you for using Pocket Buddy! You are on version: 1.1.0"); }, undefined, false),
 		];
 
 		/** @type {Birb} */
