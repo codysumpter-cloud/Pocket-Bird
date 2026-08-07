@@ -1,0 +1,44 @@
+appId: dev.prismtek.pocketbuddy
+productName: Pocket Buddy
+artifactName: Pocket-Buddy-${version}-${os}-${arch}.${ext}
+
+files:
+  - desktop/**
+  - dist/desktop/**
+  - images/icons/transparent/**
+  - package.json
+
+asar: true
+npmRebuild: false
+publish: null
+
+directories:
+  output: dist-native
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - dmg
+    - zip
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  artifactName: Pocket-Buddy-${version}-mac-${arch}.${ext}
+
+win:
+  target:
+    - nsis
+    - portable
+  verifyUpdateCodeSignature: false
+  artifactName: Pocket-Buddy-${version}-win-${arch}.${ext}
+
+nsis:
+  artifactName: Pocket-Buddy-${version}-win-${arch}-setup.${ext}
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Pocket Buddy
+  uninstallDisplayName: Pocket Buddy
+
+portable:
+  artifactName: Pocket-Buddy-${version}-win-${arch}-portable.${ext}
