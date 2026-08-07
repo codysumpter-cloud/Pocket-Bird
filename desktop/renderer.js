@@ -4,6 +4,8 @@
 
   let lastInteractive = null;
   let shadowRoot = null;
+  let displayState = null;
+  let displayObserver = null;
 
   function setInteractive(value) {
     const next = Boolean(value);
@@ -43,10 +45,99 @@
   document.addEventListener("mouseleave", () => setInteractive(false), { passive: true });
   document.addEventListener("contextmenu", (event) => event.preventDefault());
 
+  function displayChoices(snapshot) {
+    const displays = Array.isArray(snapshot?.displays) ? snapshot.displays : [];
+    const primary = displays.find((display) => display.primary);
+    return [
+      { id: "primary", label: primary ? `Primary — ${primary.label}` : "Primary" },
+      ...displays.filter((display) => !display.primary).map((display) => ({ id: display.id, label: display.label })),
+    ];
+  }
+
+  function selectedDisplayLabel(snapshot) {
+    const choice = displayChoices(snapshot).find((item) => item.id === snapshot?.selected);
+    return choice?.label ?? "Primary";
+  }
+
+  async function refreshDisplayState() {
+    displayState = await bridge.listDisplays();
+    return displayState;
+  }
+
+  async function cycleDisplay(delta) {
+    const snapshot = displayState ?? await refreshDisplayState();
+    const choices = displayChoices(snapshot);
+    if (!choices.length) return;
+    const current = Math.max(0, choices.findIndex((choice) => choice.id === snapshot.selected));
+    const next = choices[(current + delta + choices.length) % choices.length];
+    displayState = await bridge.selectDisplay(next.id);
+    await augmentMonitorSetting();
+  }
+
+  function isSettingsMenu(menu) {
+    const labels = [...menu.querySelectorAll(".birb-menu-item")].map((item) => item.textContent?.trim() ?? "");
+    return labels.some((label) => label === "Go Back") && labels.some((label) => label.startsWith("UI Scale"));
+  }
+
+  async function augmentMonitorSetting() {
+    const root = findShadowRoot();
+    const menu = root?.querySelector("#birb-menu");
+    if (!menu || !isSettingsMenu(menu)) return;
+    const content = menu.querySelector(".birb-window-content");
+    if (!content) return;
+    if (!displayState) await refreshDisplayState();
+
+    let row = content.querySelector(".pb-desktop-monitor-setting");
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "birb-menu-item birb-menu-item-spinner pb-desktop-monitor-setting";
+      const label = document.createElement("span");
+      label.className = "pb-desktop-monitor-label";
+      label.title = "Click to follow the Windows/macOS primary monitor";
+      label.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        displayState = await bridge.selectDisplay("primary");
+        await augmentMonitorSetting();
+      });
+      const controls = document.createElement("div");
+      controls.className = "birb-menu-item-spinner-container";
+      const left = document.createElement("div");
+      left.className = "birb-spinner-button birb-spinner-button-negative";
+      left.textContent = "-";
+      const right = document.createElement("div");
+      right.className = "birb-spinner-button birb-spinner-button-positive";
+      right.textContent = "+";
+      left.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); void cycleDisplay(-1); });
+      right.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); void cycleDisplay(1); });
+      controls.append(left, right);
+      row.append(label, controls);
+      const uiScale = [...content.querySelectorAll(".birb-menu-item")].find((item) => item.textContent?.trim().startsWith("UI Scale"));
+      if (uiScale?.nextSibling) content.insertBefore(row, uiScale.nextSibling);
+      else content.append(row);
+    }
+    const label = row.querySelector(".pb-desktop-monitor-label");
+    const nextText = `Monitor: ${selectedDisplayLabel(displayState)}`;
+    if (label && label.textContent !== nextText) label.textContent = nextText;
+  }
+
+  function installMonitorSettingsWatcher(root) {
+    if (displayObserver) return;
+    displayObserver = new MutationObserver(() => { void augmentMonitorSetting(); });
+    displayObserver.observe(root, { childList: true, subtree: true });
+    void refreshDisplayState().then(() => augmentMonitorSetting());
+    bridge.onDisplaysChanged((snapshot) => {
+      displayState = snapshot;
+      void augmentMonitorSetting();
+    });
+  }
+
   const interval = setInterval(() => {
-    if (findShadowRoot()) {
+    const root = findShadowRoot();
+    if (root) {
       clearInterval(interval);
       setInteractive(false);
+      installMonitorSettingsWatcher(root);
     }
   }, 50);
 
