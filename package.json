@@ -1,17 +1,30 @@
 {
-  "name": "birb",
-  "version": "1.0.0",
-  "description": "",
+  "name": "pocket-buddy",
+  "version": "1.1.0",
+  "description": "Pocket Bird's tiny pet-first shell upgraded with Buddy Brain, pets, Home, and native desktop builds.",
   "license": "ISC",
-  "author": "Idrees Hassan",
+  "author": "Prismtek / Idrees Hassan",
   "type": "module",
+  "main": "desktop/main.mjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codysumpter-cloud/Pocket-Buddy.git"
+  },
+  "homepage": "https://prismtek.dev",
   "scripts": {
     "build": "node build.js",
     "dev": "nodemon --watch src --watch package.json --watch stylesheet.css --watch build.js --watch obsidian-manifest.json --watch browser-manifest.json --watch sprites/species.png --exec \"npm run build\"",
-    "sprites": "node sprite-builder.js"
+    "sprites": "node sprite-builder.js",
+    "desktop": "npm run build && electron .",
+    "desktop:dev": "npm run build && electron .",
+    "package:desktop": "npm run build && electron-builder --config desktop/electron-builder.yml",
+    "package:desktop:win": "npm run build && electron-builder --win --config desktop/electron-builder.yml",
+    "package:desktop:mac": "npm run build && electron-builder --mac --universal --config desktop/electron-builder.yml"
   },
   "devDependencies": {
     "archiver": "^7.0.1",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.10.0",
     "nodemon": "^3.1.10",
     "rollup": "^4.52.5"
   },
