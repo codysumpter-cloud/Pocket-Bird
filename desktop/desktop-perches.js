@@ -2,7 +2,6 @@
   const PERCH_COUNT = 9;
   const PERCH_WIDTH = 150;
   const TRANSPARENT_PIXEL = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-  const TINYHOUSE_NAME = /tiny\s*house|tinyhouse/i;
   const perches = [];
 
   function ensurePerches() {
@@ -46,45 +45,10 @@
     }
   }
 
-  async function sha256Hex(buffer) {
-    const digest = await crypto.subtle.digest("SHA-256", buffer);
-    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  }
-
-  function installEnvironmentImportBridge() {
-    const library = window.PocketBuddy?.library;
-    if (!library?.importFile || library.__pocketBuddyDesktopEnvironmentBridge) return false;
-    const originalImport = library.importFile.bind(library);
-    library.importFile = async (file) => {
-      const fileName = typeof file?.name === "string" ? file.name : "";
-      if (!TINYHOUSE_NAME.test(fileName)) return originalImport(file);
-      const buffer = await file.arrayBuffer();
-      const hash = await sha256Hex(buffer);
-      return {
-        version: 1,
-        id: `environment-tinyhouse-${hash.slice(0, 12)}`,
-        displayName: "TinyHouse Home Art",
-        description: "Verified private Pixel Salvaje TinyHouse environment pack.",
-        kind: "environment",
-        source: "private-home-art",
-        archiveName: fileName,
-        archiveSha256: hash,
-        canonical: false,
-      };
-    };
-    Object.defineProperty(library, "__pocketBuddyDesktopEnvironmentBridge", { value: true });
-    return true;
-  }
-
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", layoutPerches, { once: true });
   } else {
     layoutPerches();
   }
   window.addEventListener("resize", layoutPerches, { passive: true });
-  window.addEventListener("pocket-buddy-core-ready", installEnvironmentImportBridge, { once: true });
-  const bridgeTimer = setInterval(() => {
-    if (installEnvironmentImportBridge()) clearInterval(bridgeTimer);
-  }, 50);
-  setTimeout(() => clearInterval(bridgeTimer), 15000);
 })();
