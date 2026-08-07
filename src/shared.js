@@ -39,14 +39,14 @@ export function setContext(newContext) {
 
 /**
  * Create an HTML element with the specified parameters
- * @param {string} className
+ * @param {string} className One or more whitespace-separated CSS classes
  * @param {string} [textContent]
  * @param {string} [id]
  * @returns {HTMLElement}
  */
 export function makeElement(className, textContent, id) {
 	const element = document.createElement("div");
-	element.classList.add(className);
+	element.classList.add(...String(className).split(/\s+/).filter(Boolean));
 	if (textContent) {
 		element.textContent = textContent;
 	}
@@ -200,7 +200,6 @@ export function error() {
  * @returns {string[][]}
  */
 export function getLayerPixels(spriteSheet, spriteIndex, width) {
-	// From an array of a horizontal sprite sheet, get the layer for a specific sprite
 	const layer = [];
 	for (let y = 0; y < width; y++) {
 		layer.push(spriteSheet[y].slice(spriteIndex * width, (spriteIndex + 1) * width));
@@ -208,23 +207,10 @@ export function getLayerPixels(spriteSheet, spriteIndex, width) {
 	return layer;
 }
 
-/**
- * The height of the inner browser window
- * Will be the same as getFixedWindowHeight() on most browsers
- * On iOS, it will vary to be the height excluding the current address bar size (potentially greater than fixed height)
- */
 export function getWindowHeight() {
-	// Necessary because iOS 26 Safari is terrible and won't render
-	// fixed/sticky elements behind the address bar
 	return window.innerHeight;
 }
 
-/**
- * The fixed height of the inner browser window
- * Will be the same as getWindowHeight() on most browsers
- * On iOS, it will always be the height of the window when the address bar is fully expanded
- * @returns The true height of the inner browser window
- */
 export function getFixedWindowHeight() {
 	return document.documentElement.clientHeight;
 }
