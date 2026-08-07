@@ -8,31 +8,74 @@ const home = read("src/buddy/home.js");
 const runtime = read("src/buddy/pet-runtime.js");
 const desktopPerches = read("desktop/desktop-perches.js");
 const desktopIndex = read("desktop/index.html");
+const desktopMain = read("desktop/main.mjs");
+const desktopRenderer = read("desktop/renderer.js");
+const desktopPreload = read("desktop/preload.cjs");
+const canonicalHome = read("desktop/canonical-home.mjs");
+const actorBridge = read("desktop/pocket-buddy-home-actors.js");
+const donorCommit = read("desktop/tinyhouse-home/POCKETBUDDYPLUS_DONOR_COMMIT").trim();
+const donorApp = read("desktop/tinyhouse-home/app.js");
+const donorGrid = read("desktop/tinyhouse-home/house-grid-core.js");
+const donorLocalAssets = read("desktop/tinyhouse-home/local-assets.js");
 
-test("Home is TinyHouse-backed and fails closed instead of drawing substitute geometry", () => {
-  assert.match(home, /openZipArchive/);
-  assert.match(home, /Floor_64_WoodLight\.png/);
-  assert.match(home, /Wall_L_64_White\.png/);
-  assert.match(home, /Wall_R_64_White\.png/);
-  assert.match(home, /Bedroom\/Bed_A_4\.png/);
-  assert.match(home, /Living Roon\/Table_10\.png/);
-  assert.match(home, /Chairs\/Chair_2_A_Tile\.png/);
-  assert.match(home, /Sofa\/Sofa_3_A_Tile\.png/);
-  assert.match(home, /Plants\/Plant_1\.png/);
-  assert.match(home, /Doors\/Door_2_Brown\.png/);
-  assert.match(home, /No substitute human will be drawn/);
-  assert.doesNotMatch(home, /fallbackHuman/);
+test("Windows Home delegates to the exact vendored PocketBuddy+ TinyHouse runtime", () => {
+  assert.equal(donorCommit, "6e4a80775f8a7f5b0d243b0a9f50e6653526219b");
+  assert.match(home, /PocketBuddyDesktop/);
+  assert.match(home, /bridge\.openHome/);
+  assert.match(home, /humanScale: 1\.2/);
+  assert.doesNotMatch(home, /openZipArchive/);
   assert.doesNotMatch(home, /function diamond\(/);
-  assert.doesNotMatch(home, /function furniture\(/);
+  assert.doesNotMatch(home, /drawFurniture/);
+  assert.doesNotMatch(home, /fallbackHuman/);
 });
 
-test("Home and custom pets honor the original Pocket Bird scale settings", () => {
+test("canonical donor keeps the verified 128x64 isometric geometry", () => {
+  assert.match(donorApp, /tileWidth:\s*128/);
+  assert.match(donorApp, /tileStepX:\s*64/);
+  assert.match(donorApp, /tileStepY:\s*32/);
+  assert.match(donorApp, /floorTopPixelY:\s*36/);
+  assert.match(donorApp, /wallLiftY:\s*-48/);
+  assert.match(donorApp, /leftWallShiftX:\s*-32/);
+  assert.match(donorApp, /rightWallShiftX:\s*32/);
+  assert.match(donorApp, /geometryChecks/);
+  assert.match(donorGrid, /class HouseGrid/);
+  assert.match(donorGrid, /canTraverse\(a, b\)/);
+  assert.match(donorGrid, /setDoor\(/);
+  assert.match(donorGrid, /addConnectedRoom\(/);
+});
+
+test("canonical Home server feeds the verified TinyHouse ZIP into the donor loader without extraction or substitution", () => {
+  assert.match(canonicalHome, /127\.0\.0\.1/);
+  assert.match(canonicalHome, /\/home\/index\.html\?pack=\/pack\//);
+  assert.match(canonicalHome, /kind === "environment"/);
+  assert.match(canonicalHome, /Home will not substitute fake art/);
+  assert.match(canonicalHome, /part\.trim\(\)/);
+  assert.match(canonicalHome, /inflateRawSync/);
+  assert.match(donorLocalAssets, /new URLSearchParams\(location\.search\)\.get\("pack"\)/);
+  assert.match(donorLocalAssets, /attachFromBaseUrl/);
+});
+
+test("Ani and Buddy actors use donor world coordinates, wall traversal, and native PixelLab frames", () => {
+  assert.match(actorBridge, /TinyHousePlayable\.cellCenter/);
+  assert.match(actorBridge, /TinyHouseStructure/);
+  assert.match(actorBridge, /grid\.canTraverse|canTraverse\(from, to\)/);
+  assert.match(actorBridge, /metadata\.json/);
+  assert.match(actorBridge, /ani_idle/);
+  assert.match(actorBridge, /ani_walk/);
+  assert.match(actorBridge, /humanScale\) \|\| 1\.2/);
+  assert.match(actorBridge, /image-rendering:pixelated/);
+  assert.doesNotMatch(actorBridge, /fallbackHuman|fillRect\([^)]*human/i);
+});
+
+test("Home and custom pets honor Pocket Bird scale settings without shrinking Ani to the old 0.64 value", () => {
   assert.match(runtime, /--birb-scale/);
   assert.match(runtime, /--birb-ui-scale/);
   assert.match(runtime, /scaleMultiplier\(\)/);
   assert.match(home, /petRuntime\.scaleMultiplier\(\)/);
   assert.match(home, /petRuntime\.uiScaleMultiplier\(\)/);
-  assert.match(home, /--pb-ui-scale/);
+  assert.match(actorBridge, /--pb-home-ui-scale/);
+  assert.doesNotMatch(home, /\.64/);
+  assert.doesNotMatch(actorBridge, /humanScale[^\n]*0\.64/);
 });
 
 test("selecting an original Field Guide bird relinquishes the custom-pet overlay", () => {
@@ -46,8 +89,8 @@ test("custom pets reuse Pocket Bird affection feedback", () => {
   assert.match(runtime, /pb-pet-heart/);
   assert.match(runtime, /reaction === "heart"/);
   assert.match(runtime, /reaction === "pet"/);
-  assert.match(runtime, /reaction === "waving"/);
-  assert.match(home, /petRuntime\.react\("heart"/);
+  assert.match(actorBridge, /♥/);
+  assert.match(actorBridge, /care\?\.\("pet"\)/);
 });
 
 test("desktop seeds broad invisible perch targets before Pocket Buddy boots", () => {
@@ -60,9 +103,12 @@ test("desktop seeds broad invisible perch targets before Pocket Buddy boots", ()
   assert.ok(perchIndex >= 0 && buddyIndex > perchIndex, "desktop perches must exist before the Pocket Bird movement engine starts");
 });
 
-test("TinyHouse is intercepted as environment art instead of a pet import", () => {
-  assert.match(desktopPerches, /TINYHOUSE_NAME/);
-  assert.match(desktopPerches, /kind: "environment"/);
-  assert.match(desktopPerches, /source: "private-home-art"/);
-  assert.match(desktopPerches, /archiveSha256: hash/);
+test("environment art stays out of the pet importer and is preserved for canonical Home", () => {
+  assert.match(desktopMain, /item\.kind === "environment" \? "environment"/);
+  assert.match(desktopRenderer, /entry\.kind === "environment"/);
+  assert.match(desktopRenderer, /skipped \+= 1/);
+  assert.match(desktopPreload, /openHome\(options\)/);
+  assert.match(desktopMain, /createCanonicalHomeManager/);
+  assert.match(desktopMain, /pocket-buddy:open-home/);
+  assert.match(desktopMain, /canonicalHome\?\.reclamp/);
 });
