@@ -50,8 +50,8 @@ jobs:
           grep -q 'PocketBuddy' dist/extension/birb.js
           grep -q 'PocketBuddy' dist/obsidian/main.js
           grep -q "Pocket Buddy ${VERSION}" dist/web/birb.embed.js
-          grep -q "coreVersion: \"${VERSION}\"" dist/web/birb.embed.js
           grep -q 'Auto (Follow Buddy)' dist/web/birb.embed.js
+          ! grep -q '__POCKET_BUDDY_VERSION__' dist/web/birb.embed.js
           grep -q 'github.com/codysumpter-cloud/Pocket-Buddy' dist/web/birb.embed.js
           ! grep -q 'github.com/IdreesInc/Pocket-Bird' dist/web/birb.embed.js
           node -e "const m=require('./dist/extension/manifest.json'); if(m.name!=='Pocket Buddy'||m.version!==process.argv[1]) process.exit(1)" "$VERSION"
