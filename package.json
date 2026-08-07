@@ -12,8 +12,8 @@
   },
   "homepage": "https://prismtek.dev",
   "scripts": {
-    "build": "node build.js",
-    "dev": "nodemon --watch src --watch package.json --watch stylesheet.css --watch build.js --watch obsidian-manifest.json --watch browser-manifest.json --watch sprites/species.png --exec \"npm run build\"",
+    "build": "node build.js && node scripts/postprocess-build.mjs",
+    "dev": "nodemon --watch src --watch package.json --watch stylesheet.css --watch build.js --watch scripts/postprocess-build.mjs --watch obsidian-manifest.json --watch browser-manifest.json --watch sprites/species.png --exec \"npm run build\"",
     "sprites": "node sprite-builder.js",
     "desktop": "npm run build && electron .",
     "desktop:dev": "npm run build && electron .",
