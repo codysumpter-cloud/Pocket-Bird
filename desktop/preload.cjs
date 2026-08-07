@@ -13,4 +13,10 @@ contextBridge.exposeInMainWorld("PocketBuddyDesktop", {
     ipcRenderer.on("pocket-buddy:command", handler);
     return () => ipcRenderer.removeListener("pocket-buddy:command", handler);
   },
+  listBundledArt() {
+    return ipcRenderer.invoke("pocket-buddy:list-bundled-art");
+  },
+  readBundledArt(id) {
+    return ipcRenderer.invoke("pocket-buddy:read-bundled-art", String(id ?? ""));
+  },
 });
